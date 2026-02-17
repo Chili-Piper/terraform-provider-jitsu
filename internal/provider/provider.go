@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"os"
+	"strings"
 
 	"github.com/chilipiper/terraform-provider-jitsu/internal/client"
 	"github.com/chilipiper/terraform-provider-jitsu/internal/resources"
@@ -15,7 +16,9 @@ import (
 
 var _ provider.Provider = &jitsuProvider{}
 
-type jitsuProvider struct{}
+type jitsuProvider struct {
+	version string
+}
 
 type jitsuProviderModel struct {
 	ConsoleURL  types.String `tfsdk:"console_url"`
@@ -24,8 +27,10 @@ type jitsuProviderModel struct {
 	DatabaseURL types.String `tfsdk:"database_url"`
 }
 
-func New() provider.Provider {
-	return &jitsuProvider{}
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &jitsuProvider{version: version}
+	}
 }
 
 func (p *jitsuProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -43,6 +48,7 @@ func (p *jitsuProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 			"username": schema.StringAttribute{
 				Description: "Jitsu username for session authentication. Can also be set via JITSU_USERNAME env var.",
 				Optional:    true,
+				Sensitive:   true,
 			},
 			"password": schema.StringAttribute{
 				Description: "Jitsu password for session authentication. Can also be set via JITSU_PASSWORD env var.",
@@ -76,6 +82,14 @@ func (p *jitsuProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
+	if !strings.HasPrefix(consoleURL, "https://") {
+		resp.Diagnostics.AddWarning(
+			"Insecure console_url",
+			"console_url does not use HTTPS. Credentials will be sent unencrypted. "+
+				"This is acceptable for local development but not recommended for production.",
+		)
+	}
+
 	username := os.Getenv("JITSU_USERNAME")
 	if !config.Username.IsNull() {
 		username = config.Username.ValueString()
@@ -98,7 +112,8 @@ func (p *jitsuProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		databaseURL = config.DatabaseURL.ValueString()
 	}
 
-	c := client.New(consoleURL, username, password, databaseURL)
+	userAgent := "terraform-provider-jitsu/" + p.version
+	c := client.New(consoleURL, username, password, databaseURL, userAgent)
 	resp.ResourceData = c
 	resp.DataSourceData = c
 }

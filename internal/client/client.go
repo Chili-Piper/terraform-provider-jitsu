@@ -24,6 +24,7 @@ type Client struct {
 	username    string
 	password    string
 	databaseURL string
+	userAgent   string
 	httpClient  *http.Client
 
 	authMu        sync.Mutex
@@ -35,13 +36,17 @@ type Client struct {
 }
 
 // New creates a new Jitsu API client. databaseURL is optional — needed only for soft-delete recovery.
-func New(consoleURL, username, password, databaseURL string) *Client {
-	jar, _ := cookiejar.New(nil)
+func New(consoleURL, username, password, databaseURL, userAgent string) *Client {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		panic(fmt.Sprintf("cookiejar.New: %v", err))
+	}
 	return &Client{
 		consoleURL:  strings.TrimRight(consoleURL, "/"),
 		username:    username,
 		password:    password,
 		databaseURL: databaseURL,
+		userAgent:   userAgent,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Jar:     jar,
@@ -210,6 +215,9 @@ func (c *Client) rawRequest(ctx context.Context, method, requestURL string, reqB
 	if err != nil {
 		return nil, 0, fmt.Errorf("creating request: %w", err)
 	}
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -247,6 +255,9 @@ func (c *Client) doRequest(ctx context.Context, method, requestURL string, body 
 			return nil, 0, fmt.Errorf("creating request: %w", err)
 		}
 
+		if c.userAgent != "" {
+			req.Header.Set("User-Agent", c.userAgent)
+		}
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
