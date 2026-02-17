@@ -13,7 +13,7 @@ import (
 )
 
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
-	"jitsu": providerserver.NewProtocol6WithError(provider.New()),
+	"jitsu": providerserver.NewProtocol6WithError(provider.New("test")()),
 }
 
 func testAccProviderConfig(t *testing.T) string {

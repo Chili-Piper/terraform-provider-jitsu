@@ -5,3 +5,4 @@ terraform-provider-jitsu
 .terraform.lock.hcl
 crash.log
 /.idea/
+dist/

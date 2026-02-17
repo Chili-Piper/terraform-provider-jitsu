@@ -26,7 +26,7 @@ func testAccRemoteClient() *client.Client {
 	username := testAccUsername()
 	password := testAccPassword()
 
-	return client.New(consoleURL, username, password, databaseURL)
+	return client.New(consoleURL, username, password, databaseURL, "terraform-provider-jitsu/test")
 }
 
 func testAccConsoleURL() string {
