@@ -1,0 +1,92 @@
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: jitsu-tfacc-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9094
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9094,PLAINTEXT_HOST://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
+
+  postgres:
+    image: postgres
+    container_name: jitsu-tfacc-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: reporting
+      POSTGRES_PASSWORD: plz_no_hack!
+      POSTGRES_DB: reporting
+    volumes:
+      - jitsu_tfacc_postgres_data:/var/lib/postgresql/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: jitsu-tfacc-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_USER: reporting
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - jitsu_tfacc_clickhouse_data:/var/lib/clickhouse
+
+  redis:
+    image: redis:7-alpine
+    container_name: jitsu-tfacc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - jitsu_tfacc_redis_data:/data
+
+  jitsu-console:
+    image: jitsucom/console:latest
+    container_name: jitsu-tfacc-console
+    ports:
+      - "3300:3000"
+    environment:
+      DATABASE_URL: "postgresql://reporting:plz_no_hack!@postgres:5432/reporting?schema=newjitsu"
+      APP_DATABASE_URL: "postgresql://reporting:plz_no_hack!@postgres:5432/reporting?schema=newjitsu"
+      CLICKHOUSE_URL: "http://clickhouse:8123/"
+      CLICKHOUSE_HOST: "clickhouse:8123"
+      CLICKHOUSE_USERNAME: "reporting"
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DATABASE: "default"
+      CLICKHOUSE_SSL: "false"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_SSL: "false"
+      REDIS_URL: "redis://redis:6379"
+      CONSOLE_RAW_AUTH_TOKENS: "dev-auth-key"
+      JWT_SECRET: "6de1460fd8ba429285c9e72cc5339291"
+      EE_CONNECTION: "http://jitsu-console:3000?jwtSecret=6de1460fd8ba429285c9e72cc5339291"
+      EE_DISABLE_AUTH: "yes"
+      DISABLE_SIGNUP: "false"
+      ENABLE_CREDENTIALS_LOGIN: "true"
+      SEED_USER_EMAIL: "admin@jitsu.com"
+      SEED_USER_PASSWORD: "admin123"
+      NODE_ENV: "development"
+      LOG_LEVEL: "debug"
+    depends_on:
+      - postgres
+      - clickhouse
+      - kafka
+      - redis
+
+volumes:
+  jitsu_tfacc_postgres_data:
+  jitsu_tfacc_clickhouse_data:
+  jitsu_tfacc_redis_data:

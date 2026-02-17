@@ -1,0 +1,6 @@
+terraform-provider-jitsu
+*.exe
+.terraform/
+*.tfstate*
+.terraform.lock.hcl
+crash.log
