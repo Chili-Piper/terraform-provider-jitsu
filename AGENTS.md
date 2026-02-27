@@ -28,8 +28,7 @@
 - Test names follow `TestAcc<Resource>_<scenario>` (for example, `TestAccFunction_basic`).
 - Acceptance tests require:
   - `JITSU_CONSOLE_URL`
-  - `JITSU_USERNAME`
-  - `JITSU_PASSWORD`
+  - `JITSU_AUTH_TOKEN`
   - `JITSU_DATABASE_URL`
 - Run `make test` before every PR; run `make testacc` when changing provider/resource/client behavior.
 
