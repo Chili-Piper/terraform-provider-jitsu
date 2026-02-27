@@ -59,9 +59,9 @@ tofu init
 
 ## Authentication
 
-Provider uses session authentication via:
+Provider uses bearer token authentication via:
 
-- `username` + `password` (or env `JITSU_USERNAME` / `JITSU_PASSWORD`)
+- `auth_token` (or env `JITSU_AUTH_TOKEN`) — a user API key (format: `keyId:secret`)
 
 `console_url` can be set via `JITSU_CONSOLE_URL`.
 
@@ -80,8 +80,7 @@ terraform {
 
 provider "jitsu" {
   console_url  = "http://localhost:3300"
-  username     = "admin@jitsu.com"
-  password     = "admin123"
+  auth_token   = "keyId:secret"  # or set JITSU_AUTH_TOKEN env var
   database_url = "postgres://reporting:plz_no_hack!@localhost:5432/reporting?sslmode=disable"
 }
 
@@ -177,8 +176,7 @@ make testacc
 Common environment variables:
 
 - `JITSU_CONSOLE_URL`
-- `JITSU_USERNAME`
-- `JITSU_PASSWORD`
+- `JITSU_AUTH_TOKEN`
 - `JITSU_DATABASE_URL`
 
 Local stack for testing is available at `workbench/docker-compose.yaml`.

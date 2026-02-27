@@ -43,8 +43,8 @@ TF_ACC=1 go test ./internal/provider -v -run TestAccFunctionResource
 
 Acceptance tests require:
 - `JITSU_CONSOLE_URL` - Jitsu Console URL (e.g., http://localhost:3300)
-- `JITSU_USERNAME` - User email/username for credentials login
-- `JITSU_PASSWORD` - User password for credentials login
+- `JITSU_AUTH_TOKEN` - Bearer token for API authentication (user API key in `keyId:secret` format)
+  - Admin tokens don't work due to API limitations (e.g., during workspace creation the API associates it with the user).
 - `JITSU_DATABASE_URL` - PostgreSQL connection string to Console's database
 
 ## Code Architecture
@@ -53,7 +53,7 @@ Acceptance tests require:
 
 1. **main.go** - Provider entry point, registers the provider with the Terraform plugin framework
 2. **internal/provider/** - Provider configuration and resource registration
-   - `provider.go` - Provider schema (console_url, username, password, database_url), configuration, and resource registration
+   - `provider.go` - Provider schema (console_url, auth_token, database_url), configuration, and resource registration
    - `*_test.go` - Acceptance tests using `terraform-plugin-testing` framework
    - `testutil_test.go` - Shared test utilities and provider factory
 3. **internal/client/** - HTTP client for Jitsu Console API
@@ -68,7 +68,7 @@ Acceptance tests require:
 ### Client Layer Details
 
 The `client.Client` handles:
-- HTTP requests to Jitsu Console API with credentials-based session authentication
+- HTTP requests to Jitsu Console API with bearer token authentication
 - Soft-delete recovery: when POST returns unique constraint error, it hard-deletes the soft-deleted row via direct SQL and retries
 - Lazy database connection initialization (only when database_url is configured)
 - URL construction for config objects: `/api/{workspaceID}/config/{resourceType}[/{id}]`
@@ -111,9 +111,8 @@ Use `testWorkspaceID(t)` helper to get workspace ID from environment and skip if
 ```hcl
 provider "jitsu" {
   console_url  = "http://localhost:3300"  # or JITSU_CONSOLE_URL
-  username     = "admin@jitsu.com"         # or JITSU_USERNAME
-  password     = "admin123"                # or JITSU_PASSWORD (sensitive)
-  database_url = "postgres://..."          # or JITSU_DATABASE_URL (sensitive, optional but recommended)
+  auth_token   = "keyId:secret"           # or JITSU_AUTH_TOKEN (sensitive)
+  database_url = "postgres://..."         # or JITSU_DATABASE_URL (sensitive, optional but recommended)
 }
 ```
 

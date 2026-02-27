@@ -29,24 +29,18 @@ func testAccProviderConfig(t *testing.T) string {
 		databaseURL = "postgres://reporting:plz_no_hack!@localhost:5432/reporting?sslmode=disable"
 	}
 
-	username := os.Getenv("JITSU_USERNAME")
-	if username == "" {
-		username = "admin@jitsu.com"
-	}
-
-	password := os.Getenv("JITSU_PASSWORD")
-	if password == "" {
-		password = "admin123"
+	authToken := os.Getenv("JITSU_AUTH_TOKEN")
+	if authToken == "" {
+		authToken = "test-auth-token"
 	}
 
 	return fmt.Sprintf(`
 provider "jitsu" {
   console_url  = %q
-  username     = %q
-  password     = %q
+  auth_token   = %q
   database_url = %q
 }
-`, consoleURL, username, password, databaseURL)
+`, consoleURL, authToken, databaseURL)
 }
 
 func testAccSuffix() string {
