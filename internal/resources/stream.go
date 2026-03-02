@@ -105,7 +105,7 @@ func (r *streamResource) Configure(_ context.Context, req resource.ConfigureRequ
 
 func keysToPayload(ctx context.Context, keys types.List) ([]map[string]string, error) {
 	if keys.IsNull() || keys.IsUnknown() || len(keys.Elements()) == 0 {
-		return nil, nil
+		return []map[string]string{}, nil
 	}
 	var models []streamKeyModel
 	if diags := keys.ElementsAs(ctx, &models, false); diags.HasError() {

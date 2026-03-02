@@ -77,7 +77,49 @@ func TestKeysToPayload_NullList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != nil {
-		t.Fatalf("expected nil payload for null keys, got %#v", got)
+	if got == nil {
+		t.Fatalf("expected empty payload for null keys, got nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty payload for null keys, got %#v", got)
+	}
+}
+
+func TestKeysToPayload_UnknownList(t *testing.T) {
+	ctx := context.Background()
+	keys := types.ListUnknown(types.ObjectType{AttrTypes: streamKeyAttrTypes})
+
+	got, err := keysToPayload(ctx, keys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected empty payload for unknown keys, got nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty payload for unknown keys, got %#v", got)
+	}
+}
+
+func TestKeysToPayload_EmptyList(t *testing.T) {
+	ctx := context.Background()
+	keys, diags := types.ListValueFrom(
+		ctx,
+		types.ObjectType{AttrTypes: streamKeyAttrTypes},
+		[]streamKeyModel{},
+	)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics building keys: %v", diags)
+	}
+
+	got, err := keysToPayload(ctx, keys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected empty payload for empty keys, got nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty payload for empty keys, got %#v", got)
 	}
 }
