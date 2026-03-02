@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"sync"
@@ -21,14 +20,10 @@ import (
 // Client provides HTTP and optional DB access to the Jitsu Console API.
 type Client struct {
 	consoleURL  string
-	username    string
-	password    string
+	authToken   string
 	databaseURL string
 	userAgent   string
 	httpClient  *http.Client
-
-	authMu        sync.Mutex
-	authenticated bool
 
 	dbOnce sync.Once
 	db     *sql.DB
@@ -36,21 +31,13 @@ type Client struct {
 }
 
 // New creates a new Jitsu API client. databaseURL is optional — needed only for soft-delete recovery.
-func New(consoleURL, username, password, databaseURL, userAgent string) *Client {
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		panic(fmt.Sprintf("cookiejar.New: %v", err))
-	}
+func New(consoleURL, authToken, databaseURL, userAgent string) *Client {
 	return &Client{
 		consoleURL:  strings.TrimRight(consoleURL, "/"),
-		username:    username,
-		password:    password,
+		authToken:   authToken,
 		databaseURL: databaseURL,
 		userAgent:   userAgent,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-			Jar:     jar,
-		},
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -133,94 +120,33 @@ func (c *Client) workspaceItemURL(idOrSlug string) string {
 	return fmt.Sprintf("%s/api/workspace/%s", c.consoleURL, url.PathEscape(idOrSlug))
 }
 
-func (c *Client) authenticate(ctx context.Context) error {
-	if c.username == "" || c.password == "" {
-		return fmt.Errorf("no authentication configured: set username/password")
+func (c *Client) doRequest(ctx context.Context, method, requestURL string, body interface{}) ([]byte, int, error) {
+	var reqBody io.Reader
+	if body != nil {
+		jsonBytes, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("marshaling request body: %w", err)
+		}
+		reqBody = bytes.NewReader(jsonBytes)
 	}
 
-	c.authMu.Lock()
-	defer c.authMu.Unlock()
-
-	if c.authenticated {
-		return nil
-	}
-
-	csrfURL := fmt.Sprintf("%s/api/auth/csrf", c.consoleURL)
-	csrfRespBody, status, err := c.rawRequest(ctx, http.MethodGet, csrfURL, nil, map[string]string{})
-	if err != nil {
-		return fmt.Errorf("requesting CSRF token: %w", err)
-	}
-	if status < 200 || status >= 300 {
-		return fmt.Errorf("GET %s returned %d: %s", csrfURL, status, string(csrfRespBody))
-	}
-
-	var csrf struct {
-		Token string `json:"csrfToken"`
-	}
-	if err := json.Unmarshal(csrfRespBody, &csrf); err != nil {
-		return fmt.Errorf("parsing CSRF response: %w", err)
-	}
-	if csrf.Token == "" {
-		return fmt.Errorf("empty CSRF token in response")
-	}
-
-	loginURL := fmt.Sprintf("%s/api/auth/callback/credentials", c.consoleURL)
-	form := url.Values{}
-	form.Set("username", c.username)
-	form.Set("password", c.password)
-	form.Set("csrfToken", csrf.Token)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return fmt.Errorf("creating login request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	// NextAuth credential callback returns redirect; keep cookie side-effects without following that redirect.
-	loginClient := *c.httpClient
-	loginClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	resp, err := loginClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("executing login request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	loginRespBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading login response: %w", err)
-	}
-	// NextAuth often responds with 302 on successful credential login.
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return fmt.Errorf("POST %s returned %d: %s", loginURL, resp.StatusCode, string(loginRespBody))
-	}
-
-	c.authenticated = true
-	return nil
-}
-
-func (c *Client) markUnauthenticated() {
-	c.authMu.Lock()
-	c.authenticated = false
-	c.authMu.Unlock()
-}
-
-func isAuthFailureStatus(status int) bool {
-	return status == http.StatusUnauthorized || status == http.StatusForbidden
-}
-
-func (c *Client) rawRequest(ctx context.Context, method, requestURL string, reqBody io.Reader, headers map[string]string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, method, requestURL, reqBody)
 	if err != nil {
 		return nil, 0, fmt.Errorf("creating request: %w", err)
 	}
+
+	req.Header.Set("Authorization", "Bearer "+c.authToken)
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
+
+	tflog.Debug(ctx, "API request", map[string]interface{}{
+		"method": method,
+		"url":    requestURL,
+	})
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -232,84 +158,14 @@ func (c *Client) rawRequest(ctx context.Context, method, requestURL string, reqB
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("reading response body: %w", err)
 	}
+
+	tflog.Debug(ctx, "API response", map[string]interface{}{
+		"method":      method,
+		"url":         requestURL,
+		"status_code": resp.StatusCode,
+	})
+
 	return respBody, resp.StatusCode, nil
-}
-
-func (c *Client) doRequest(ctx context.Context, method, requestURL string, body interface{}) ([]byte, int, error) {
-	if err := c.authenticate(ctx); err != nil {
-		return nil, 0, err
-	}
-
-	send := func() ([]byte, int, error) {
-		var reqBody io.Reader
-		if body != nil {
-			jsonBytes, err := json.Marshal(body)
-			if err != nil {
-				return nil, 0, fmt.Errorf("marshaling request body: %w", err)
-			}
-			reqBody = bytes.NewReader(jsonBytes)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, method, requestURL, reqBody)
-		if err != nil {
-			return nil, 0, fmt.Errorf("creating request: %w", err)
-		}
-
-		if c.userAgent != "" {
-			req.Header.Set("User-Agent", c.userAgent)
-		}
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-
-		tflog.Debug(ctx, "API request", map[string]interface{}{
-			"method": method,
-			"url":    requestURL,
-		})
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, 0, fmt.Errorf("executing request: %w", err)
-		}
-		defer resp.Body.Close()
-
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, resp.StatusCode, fmt.Errorf("reading response body: %w", err)
-		}
-
-		tflog.Debug(ctx, "API response", map[string]interface{}{
-			"method":      method,
-			"url":         requestURL,
-			"status_code": resp.StatusCode,
-		})
-
-		return respBody, resp.StatusCode, nil
-	}
-
-	respBody, status, err := send()
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// Session auth uses cookies; if they expire, re-authenticate once and retry.
-	if isAuthFailureStatus(status) {
-		tflog.Warn(ctx, "API request returned auth failure; re-authenticating and retrying once", map[string]interface{}{
-			"method":      method,
-			"url":         requestURL,
-			"status_code": status,
-		})
-		c.markUnauthenticated()
-		if err := c.authenticate(ctx); err != nil {
-			return nil, 0, fmt.Errorf("re-authenticating after %d response: %w", status, err)
-		}
-		respBody, status, err = send()
-		if err != nil {
-			return nil, 0, err
-		}
-	}
-
-	return respBody, status, nil
 }
 
 // Create sends POST to create a config object. Returns the response body.

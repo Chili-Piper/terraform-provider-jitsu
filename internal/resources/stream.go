@@ -105,7 +105,7 @@ func (r *streamResource) Configure(_ context.Context, req resource.ConfigureRequ
 
 func keysToPayload(ctx context.Context, keys types.List) ([]map[string]string, error) {
 	if keys.IsNull() || keys.IsUnknown() || len(keys.Elements()) == 0 {
-		return nil, nil
+		return []map[string]string{}, nil
 	}
 	var models []streamKeyModel
 	if diags := keys.ElementsAs(ctx, &models, false); diags.HasError() {
@@ -113,12 +113,31 @@ func keysToPayload(ctx context.Context, keys types.List) ([]map[string]string, e
 	}
 	result := make([]map[string]string, len(models))
 	for i, m := range models {
+		plaintext := m.Plaintext.ValueString()
 		result[i] = map[string]string{
 			"id":        m.ID.ValueString(),
-			"plaintext": m.Plaintext.ValueString(),
+			"plaintext": plaintext,
+			"hint":      keyHintFromPlaintext(plaintext),
 		}
 	}
 	return result, nil
+}
+
+// Match Jitsu Console ApiKeyEditor behavior: https://github.com/jitsucom/jitsu/blob/8c89a393468c4e56a2568f67df3659e850750750/webapps/console/components/ApiKeyEditor/ApiKeyEditor.tsx#L33-L35
+func keyHintFromPlaintext(plaintext string) string {
+	runes := []rune(plaintext)
+	n := len(runes)
+
+	firstEnd := 3
+	if n < firstEnd {
+		firstEnd = n
+	}
+	lastStart := n - 3
+	if lastStart < 0 {
+		lastStart = 0
+	}
+
+	return string(runes[:firstEnd]) + "*" + string(runes[lastStart:])
 }
 
 func (r *streamResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

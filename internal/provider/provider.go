@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"os"
-	"strings"
 
 	"github.com/chilipiper/terraform-provider-jitsu/internal/client"
 	"github.com/chilipiper/terraform-provider-jitsu/internal/resources"
@@ -22,8 +21,7 @@ type jitsuProvider struct {
 
 type jitsuProviderModel struct {
 	ConsoleURL  types.String `tfsdk:"console_url"`
-	Username    types.String `tfsdk:"username"`
-	Password    types.String `tfsdk:"password"`
+	AuthToken   types.String `tfsdk:"auth_token"`
 	DatabaseURL types.String `tfsdk:"database_url"`
 }
 
@@ -45,15 +43,12 @@ func (p *jitsuProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 				Description: "Jitsu Console URL. Can also be set via JITSU_CONSOLE_URL env var.",
 				Optional:    true,
 			},
-			"username": schema.StringAttribute{
-				Description: "Jitsu username for session authentication. Can also be set via JITSU_USERNAME env var.",
-				Optional:    true,
-				Sensitive:   true,
-			},
-			"password": schema.StringAttribute{
-				Description: "Jitsu password for session authentication. Can also be set via JITSU_PASSWORD env var.",
-				Optional:    true,
-				Sensitive:   true,
+			"auth_token": schema.StringAttribute{
+				Description: "Bearer token for Jitsu Console API authentication. " +
+					"Can be an admin token or a user API key (format: keyId:secret). " +
+					"Can also be set via JITSU_AUTH_TOKEN env var.",
+				Optional:  true,
+				Sensitive: true,
 			},
 			"database_url": schema.StringAttribute{
 				Description: "PostgreSQL connection string for Console's database. Required to handle destroy+recreate " +
@@ -82,27 +77,14 @@ func (p *jitsuProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	if !strings.HasPrefix(consoleURL, "https://") {
-		resp.Diagnostics.AddWarning(
-			"Insecure console_url",
-			"console_url does not use HTTPS. Credentials will be sent unencrypted. "+
-				"This is acceptable for local development but not recommended for production.",
-		)
+	authToken := os.Getenv("JITSU_AUTH_TOKEN")
+	if !config.AuthToken.IsNull() {
+		authToken = config.AuthToken.ValueString()
 	}
-
-	username := os.Getenv("JITSU_USERNAME")
-	if !config.Username.IsNull() {
-		username = config.Username.ValueString()
-	}
-
-	password := os.Getenv("JITSU_PASSWORD")
-	if !config.Password.IsNull() {
-		password = config.Password.ValueString()
-	}
-	if username == "" || password == "" {
+	if authToken == "" {
 		resp.Diagnostics.AddError(
 			"Missing authentication",
-			"Set both username/password in provider config or via JITSU_USERNAME/JITSU_PASSWORD.",
+			"Set auth_token in provider config or via JITSU_AUTH_TOKEN env var.",
 		)
 		return
 	}
@@ -113,7 +95,7 @@ func (p *jitsuProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 
 	userAgent := "terraform-provider-jitsu/" + p.version
-	c := client.New(consoleURL, username, password, databaseURL, userAgent)
+	c := client.New(consoleURL, authToken, databaseURL, userAgent)
 	resp.ResourceData = c
 	resp.DataSourceData = c
 }

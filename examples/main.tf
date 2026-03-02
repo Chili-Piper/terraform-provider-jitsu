@@ -8,8 +8,7 @@ terraform {
 
 provider "jitsu" {
   console_url  = "http://localhost:3300"
-  username     = "admin@jitsu.com"
-  password     = "admin123"
+  auth_token   = "keyId:secret" # or set JITSU_AUTH_TOKEN env var
   database_url = "postgres://reporting:plz_no_hack!@localhost:5432/reporting?sslmode=disable"
 }
 

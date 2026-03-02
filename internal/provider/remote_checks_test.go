@@ -23,10 +23,9 @@ const (
 func testAccRemoteClient() *client.Client {
 	consoleURL := testAccConsoleURL()
 	databaseURL := testAccDatabaseURL()
-	username := testAccUsername()
-	password := testAccPassword()
+	authToken := testAccAuthToken()
 
-	return client.New(consoleURL, username, password, databaseURL, "terraform-provider-jitsu/test")
+	return client.New(consoleURL, authToken, databaseURL, "terraform-provider-jitsu/test")
 }
 
 func testAccConsoleURL() string {
@@ -45,20 +44,12 @@ func testAccDatabaseURL() string {
 	return databaseURL
 }
 
-func testAccUsername() string {
-	username := os.Getenv("JITSU_USERNAME")
-	if username == "" {
-		username = "admin@jitsu.com"
+func testAccAuthToken() string {
+	authToken := os.Getenv("JITSU_AUTH_TOKEN")
+	if authToken == "" {
+		authToken = "test-auth-token"
 	}
-	return username
-}
-
-func testAccPassword() string {
-	password := os.Getenv("JITSU_PASSWORD")
-	if password == "" {
-		password = "admin123"
-	}
-	return password
+	return authToken
 }
 
 func testAccWithRetry(desc string, check func() error) error {
