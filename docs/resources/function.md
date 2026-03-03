@@ -9,6 +9,7 @@ description: |-
 Manages a Jitsu function. The ID must be a valid JavaScript identifier (use underscores, not hyphens).
 
 ## Example Usage
+The tenantId derivation can look different, this is trying to list all possibilities.
 
 ```hcl
 resource "jitsu_function" "inject_tenant_id" {
@@ -18,7 +19,16 @@ resource "jitsu_function" "inject_tenant_id" {
   code         = <<-JS
     export default async function(event, ctx) {
       event.properties = event.properties || {};
-      event.properties.tenant_id = ctx.source.name || "unknown";
+      // read tenantId from persistent context (set on the FE)
+      const tenantId =
+        (event.context && event.context.tenantId) // persistent property via setContextProperty
+        || event.properties?.tenantId            // or from event payload itself
+        || (event.traits && event.traits.tenantId) // if sent as user trait via identify()
+        || null;
+    
+      // fall back to source name if tenantId is missing
+      event.properties.tenant_id = tenantId || ctx.source.name || "unknown";
+    
       return event;
     }
   JS
