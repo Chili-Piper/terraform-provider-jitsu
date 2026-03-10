@@ -20,6 +20,7 @@ func TestDestinationReadAPIIntoState_ClearsAbsentOptionalFields(t *testing.T) {
 		Protocol: types.StringValue("http"),
 		Username: types.StringValue("reporting"),
 		Database: types.StringValue("default"),
+		Cluster:  types.StringValue("default"),
 		Hosts:    existingHosts,
 	}
 
@@ -42,6 +43,9 @@ func TestDestinationReadAPIIntoState_ClearsAbsentOptionalFields(t *testing.T) {
 	}
 	if !state.Database.IsNull() {
 		t.Fatalf("database should be null, got %v", state.Database)
+	}
+	if !state.Cluster.IsNull() {
+		t.Fatalf("cluster should be null, got %v", state.Cluster)
 	}
 
 	var hosts []string

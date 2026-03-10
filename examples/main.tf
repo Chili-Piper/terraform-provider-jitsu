@@ -57,6 +57,7 @@ resource "jitsu_destination" "clickhouse" {
   username         = "reporting"
   password         = ""
   database         = "default"
+  cluster          = "default"
 }
 
 resource "jitsu_link" "chilichat_to_clickhouse" {
