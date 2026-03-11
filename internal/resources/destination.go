@@ -32,6 +32,7 @@ type destinationModel struct {
 	Username        types.String `tfsdk:"username"`
 	Password        types.String `tfsdk:"password"`
 	Database        types.String `tfsdk:"database"`
+	Cluster         types.String `tfsdk:"cluster"`
 }
 
 func NewDestinationResource() resource.Resource {
@@ -90,6 +91,10 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Optional:    true,
 				Description: "Database name.",
 			},
+			"cluster": schema.StringAttribute{
+				Optional:    true,
+				Description: "ClickHouse cluster name. When set, Bulker creates tables with Replicated* engines for cross-replica data replication.",
+			},
 		},
 	}
 }
@@ -125,6 +130,9 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 	}
 	if !plan.Database.IsNull() && !plan.Database.IsUnknown() {
 		payload["database"] = plan.Database.ValueString()
+	}
+	if !plan.Cluster.IsNull() && !plan.Cluster.IsUnknown() {
+		payload["cluster"] = plan.Cluster.ValueString()
 	}
 
 	return payload, nil
@@ -193,6 +201,11 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		state.Database = types.StringValue(v)
 	} else {
 		state.Database = types.StringNull()
+	}
+	if v, ok := result["cluster"].(string); ok {
+		state.Cluster = types.StringValue(v)
+	} else {
+		state.Cluster = types.StringNull()
 	}
 
 	return diags
