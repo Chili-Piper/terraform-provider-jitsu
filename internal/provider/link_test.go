@@ -72,11 +72,13 @@ resource "jitsu_destination" "link_test" {
   id               = %[5]q
   name             = "Link Test Destination"
   destination_type = "clickhouse"
-  protocol         = "http"
-  hosts            = ["clickhouse:8123"]
-  username         = "reporting"
-  password         = ""
-  database         = "default"
+  clickhouse = {
+    protocol = "http"
+    hosts    = ["clickhouse:8123"]
+    username = "reporting"
+    password = ""
+    database = "default"
+  }
 }
 
 resource "jitsu_link" "test" {

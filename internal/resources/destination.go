@@ -3,9 +3,11 @@ package resources
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/chilipiper/terraform-provider-jitsu/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -14,25 +16,42 @@ import (
 )
 
 var (
-	_ resource.Resource                = &destinationResource{}
-	_ resource.ResourceWithImportState = &destinationResource{}
+	_ resource.Resource                   = &destinationResource{}
+	_ resource.ResourceWithImportState    = &destinationResource{}
+	_ resource.ResourceWithValidateConfig = &destinationResource{}
 )
 
 type destinationResource struct {
 	client *client.Client
 }
 
+type clickhouseModel struct {
+	Protocol types.String `tfsdk:"protocol"`
+	Hosts    types.List   `tfsdk:"hosts"`
+	Username types.String `tfsdk:"username"`
+	Password types.String `tfsdk:"password"`
+	Database types.String `tfsdk:"database"`
+	Cluster  types.String `tfsdk:"cluster"`
+}
+
+type bigqueryModel struct {
+	Credentials types.String `tfsdk:"credentials"`
+	ProjectID   types.String `tfsdk:"project_id"`
+	BQDataset   types.String `tfsdk:"bq_dataset"`
+}
+
 type destinationModel struct {
-	WorkspaceID     types.String `tfsdk:"workspace_id"`
-	ID              types.String `tfsdk:"id"`
-	Name            types.String `tfsdk:"name"`
-	DestinationType types.String `tfsdk:"destination_type"`
-	Protocol        types.String `tfsdk:"protocol"`
-	Hosts           types.List   `tfsdk:"hosts"`
-	Username        types.String `tfsdk:"username"`
-	Password        types.String `tfsdk:"password"`
-	Database        types.String `tfsdk:"database"`
-	Cluster         types.String `tfsdk:"cluster"`
+	WorkspaceID     types.String     `tfsdk:"workspace_id"`
+	ID              types.String     `tfsdk:"id"`
+	Name            types.String     `tfsdk:"name"`
+	DestinationType types.String     `tfsdk:"destination_type"`
+	ClickHouse      *clickhouseModel `tfsdk:"clickhouse"`
+	BigQuery        *bigqueryModel   `tfsdk:"bigquery"`
+}
+
+type destinationConfigIssue struct {
+	attribute string
+	detail    string
 }
 
 func NewDestinationResource() resource.Resource {
@@ -45,7 +64,7 @@ func (r *destinationResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Jitsu destination (e.g., ClickHouse, PostgreSQL).",
+		Description: "Manages a Jitsu destination (e.g., ClickHouse, BigQuery).",
 		Attributes: map[string]schema.Attribute{
 			"workspace_id": schema.StringAttribute{
 				Required:    true,
@@ -67,33 +86,58 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"destination_type": schema.StringAttribute{
 				Required:    true,
-				Description: "Destination type (e.g., clickhouse, postgres).",
+				Description: "Destination type (e.g., clickhouse, bigquery).",
 			},
-			"protocol": schema.StringAttribute{
+			"clickhouse": schema.SingleNestedAttribute{
 				Optional:    true,
-				Description: "Connection protocol (e.g., http, https, tcp).",
+				Description: "ClickHouse destination configuration.",
+				Attributes: map[string]schema.Attribute{
+					"protocol": schema.StringAttribute{
+						Optional:    true,
+						Description: "Connection protocol (e.g., http, https, tcp).",
+					},
+					"hosts": schema.ListAttribute{
+						Required:    true,
+						ElementType: types.StringType,
+						Description: "List of host:port addresses.",
+					},
+					"username": schema.StringAttribute{
+						Optional:    true,
+						Description: "Database username.",
+					},
+					"password": schema.StringAttribute{
+						Optional:    true,
+						Sensitive:   true,
+						Description: "Database password. API returns masked value; stored in state from user config.",
+					},
+					"database": schema.StringAttribute{
+						Optional:    true,
+						Description: "Database name.",
+					},
+					"cluster": schema.StringAttribute{
+						Optional:    true,
+						Description: "ClickHouse cluster name. When set, Bulker creates tables with Replicated* engines for cross-replica data replication.",
+					},
+				},
 			},
-			"hosts": schema.ListAttribute{
-				Required:    true,
-				ElementType: types.StringType,
-				Description: "List of host:port addresses.",
-			},
-			"username": schema.StringAttribute{
+			"bigquery": schema.SingleNestedAttribute{
 				Optional:    true,
-				Description: "Database username.",
-			},
-			"password": schema.StringAttribute{
-				Optional:    true,
-				Sensitive:   true,
-				Description: "Database password. API returns masked value; stored in state from user config.",
-			},
-			"database": schema.StringAttribute{
-				Optional:    true,
-				Description: "Database name.",
-			},
-			"cluster": schema.StringAttribute{
-				Optional:    true,
-				Description: "ClickHouse cluster name. When set, Bulker creates tables with Replicated* engines for cross-replica data replication.",
+				Description: "BigQuery destination configuration.",
+				Attributes: map[string]schema.Attribute{
+					"credentials": schema.StringAttribute{
+						Required:    true,
+						Sensitive:   true,
+						Description: "BigQuery service account JSON key.",
+					},
+					"project_id": schema.StringAttribute{
+						Required:    true,
+						Description: "GCP project ID.",
+					},
+					"bq_dataset": schema.StringAttribute{
+						Required:    true,
+						Description: "BigQuery dataset name.",
+					},
+				},
 			},
 		},
 	}
@@ -103,7 +147,86 @@ func (r *destinationResource) Configure(_ context.Context, req resource.Configur
 	r.client = configureClient(req, resp)
 }
 
+func (r *destinationResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config destinationModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	for _, issue := range destinationConfigIssues(&config) {
+		resp.Diagnostics.AddAttributeError(
+			path.Root(issue.attribute),
+			"Invalid destination configuration",
+			issue.detail,
+		)
+	}
+}
+
+func destinationConfigIssues(config *destinationModel) []destinationConfigIssue {
+	if config == nil {
+		return nil
+	}
+
+	hasClickHouse := config.ClickHouse != nil
+	hasBigQuery := config.BigQuery != nil
+
+	if config.DestinationType.IsNull() || config.DestinationType.IsUnknown() {
+		if hasClickHouse && hasBigQuery {
+			return []destinationConfigIssue{
+				{
+					attribute: "bigquery",
+					detail:    "Only one destination config block may be set. Choose either clickhouse or bigquery to match destination_type.",
+				},
+			}
+		}
+		return nil
+	}
+
+	isBigQuery := config.DestinationType.ValueString() == "bigquery"
+	issues := make([]destinationConfigIssue, 0, 2)
+
+	if isBigQuery {
+		if !hasBigQuery {
+			issues = append(issues, destinationConfigIssue{
+				attribute: "bigquery",
+				detail:    "BigQuery destinations must define the bigquery block.",
+			})
+		}
+		if hasClickHouse {
+			issues = append(issues, destinationConfigIssue{
+				attribute: "clickhouse",
+				detail:    "BigQuery destinations cannot define the clickhouse block.",
+			})
+		}
+		return issues
+	}
+
+	if !hasClickHouse {
+		issues = append(issues, destinationConfigIssue{
+			attribute: "clickhouse",
+			detail:    fmt.Sprintf("%q destinations must define the clickhouse block.", config.DestinationType.ValueString()),
+		})
+	}
+	if hasBigQuery {
+		issues = append(issues, destinationConfigIssue{
+			attribute: "bigquery",
+			detail:    fmt.Sprintf("%q destinations cannot define the bigquery block.", config.DestinationType.ValueString()),
+		})
+	}
+
+	return issues
+}
+
 func (r *destinationResource) buildPayload(ctx context.Context, plan *destinationModel) (map[string]interface{}, error) {
+	if issues := destinationConfigIssues(plan); len(issues) > 0 {
+		details := make([]string, 0, len(issues))
+		for _, issue := range issues {
+			details = append(details, issue.detail)
+		}
+		return nil, fmt.Errorf("invalid destination configuration: %s", strings.Join(details, " "))
+	}
+
 	payload := map[string]interface{}{
 		"id":              plan.ID.ValueString(),
 		"workspaceId":     plan.WorkspaceID.ValueString(),
@@ -112,27 +235,33 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 		"destinationType": plan.DestinationType.ValueString(),
 	}
 
-	if !plan.Protocol.IsNull() && !plan.Protocol.IsUnknown() {
-		payload["protocol"] = plan.Protocol.ValueString()
+	if ch := plan.ClickHouse; ch != nil {
+		if !ch.Protocol.IsNull() && !ch.Protocol.IsUnknown() {
+			payload["protocol"] = ch.Protocol.ValueString()
+		}
+		var hosts []string
+		if diags := ch.Hosts.ElementsAs(ctx, &hosts, false); diags.HasError() {
+			return nil, fmt.Errorf("reading hosts: %v", diags.Errors())
+		}
+		payload["hosts"] = hosts
+		if !ch.Username.IsNull() && !ch.Username.IsUnknown() {
+			payload["username"] = ch.Username.ValueString()
+		}
+		if !ch.Password.IsNull() && !ch.Password.IsUnknown() {
+			payload["password"] = ch.Password.ValueString()
+		}
+		if !ch.Database.IsNull() && !ch.Database.IsUnknown() {
+			payload["database"] = ch.Database.ValueString()
+		}
+		if !ch.Cluster.IsNull() && !ch.Cluster.IsUnknown() {
+			payload["cluster"] = ch.Cluster.ValueString()
+		}
 	}
 
-	var hosts []string
-	if diags := plan.Hosts.ElementsAs(ctx, &hosts, false); diags.HasError() {
-		return nil, fmt.Errorf("reading hosts: %v", diags.Errors())
-	}
-	payload["hosts"] = hosts
-
-	if !plan.Username.IsNull() && !plan.Username.IsUnknown() {
-		payload["username"] = plan.Username.ValueString()
-	}
-	if !plan.Password.IsNull() && !plan.Password.IsUnknown() {
-		payload["password"] = plan.Password.ValueString()
-	}
-	if !plan.Database.IsNull() && !plan.Database.IsUnknown() {
-		payload["database"] = plan.Database.ValueString()
-	}
-	if !plan.Cluster.IsNull() && !plan.Cluster.IsUnknown() {
-		payload["cluster"] = plan.Cluster.ValueString()
+	if bq := plan.BigQuery; bq != nil {
+		payload["credentials"] = bq.Credentials.ValueString()
+		payload["projectId"] = bq.ProjectID.ValueString()
+		payload["bqDataset"] = bq.BQDataset.ValueString()
 	}
 
 	return payload, nil
@@ -169,43 +298,70 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 	if v, ok := result["destinationType"].(string); ok {
 		state.DestinationType = types.StringValue(v)
 	}
-	if v, ok := result["protocol"].(string); ok {
-		state.Protocol = types.StringValue(v)
-	} else {
-		state.Protocol = types.StringNull()
-	}
-	if hosts, ok := result["hosts"].([]interface{}); ok {
-		hostStrs := make([]string, 0, len(hosts))
-		for _, h := range hosts {
-			if s, ok := h.(string); ok {
-				hostStrs = append(hostStrs, s)
-			}
+
+	destType, _ := result["destinationType"].(string)
+
+	switch destType {
+	case "bigquery":
+		bq := &bigqueryModel{}
+		// Credentials: API returns masked value — preserve state value
+		if state.BigQuery != nil {
+			bq.Credentials = state.BigQuery.Credentials
 		}
-		hostList, d := types.ListValueFrom(ctx, types.StringType, hostStrs)
-		diags.Append(d...)
-		if d.HasError() {
-			state.Hosts = types.ListNull(types.StringType)
+		if v, ok := result["projectId"].(string); ok {
+			bq.ProjectID = types.StringValue(v)
+		}
+		if v, ok := result["bqDataset"].(string); ok {
+			bq.BQDataset = types.StringValue(v)
+		}
+		state.BigQuery = bq
+		state.ClickHouse = nil
+
+	default:
+		ch := &clickhouseModel{}
+		if v, ok := result["protocol"].(string); ok {
+			ch.Protocol = types.StringValue(v)
 		} else {
-			state.Hosts = hostList
+			ch.Protocol = types.StringNull()
 		}
-	} else {
-		state.Hosts = types.ListNull(types.StringType)
-	}
-	if v, ok := result["username"].(string); ok {
-		state.Username = types.StringValue(v)
-	} else {
-		state.Username = types.StringNull()
-	}
-	// Password: API returns __MASKED_BY_JITSU__ — preserve state value
-	if v, ok := result["database"].(string); ok {
-		state.Database = types.StringValue(v)
-	} else {
-		state.Database = types.StringNull()
-	}
-	if v, ok := result["cluster"].(string); ok {
-		state.Cluster = types.StringValue(v)
-	} else {
-		state.Cluster = types.StringNull()
+		if hosts, ok := result["hosts"].([]interface{}); ok {
+			hostStrs := make([]string, 0, len(hosts))
+			for _, h := range hosts {
+				if s, ok := h.(string); ok {
+					hostStrs = append(hostStrs, s)
+				}
+			}
+			hostList, d := types.ListValueFrom(ctx, types.StringType, hostStrs)
+			diags.Append(d...)
+			if d.HasError() {
+				ch.Hosts = types.ListNull(types.StringType)
+			} else {
+				ch.Hosts = hostList
+			}
+		} else {
+			ch.Hosts = types.ListNull(types.StringType)
+		}
+		if v, ok := result["username"].(string); ok {
+			ch.Username = types.StringValue(v)
+		} else {
+			ch.Username = types.StringNull()
+		}
+		// Password: API returns masked value — preserve state value
+		if state.ClickHouse != nil {
+			ch.Password = state.ClickHouse.Password
+		}
+		if v, ok := result["database"].(string); ok {
+			ch.Database = types.StringValue(v)
+		} else {
+			ch.Database = types.StringNull()
+		}
+		if v, ok := result["cluster"].(string); ok {
+			ch.Cluster = types.StringValue(v)
+		} else {
+			ch.Cluster = types.StringNull()
+		}
+		state.ClickHouse = ch
+		state.BigQuery = nil
 	}
 
 	return diags
@@ -288,7 +444,7 @@ func (r *destinationResource) ImportState(ctx context.Context, req resource.Impo
 		ID:          types.StringValue(parts[1]),
 	}
 	resp.Diagnostics.Append(r.readAPIIntoState(ctx, result, &state)...)
-	// Password not available on import — API returns masked value
+	// Password/credentials not available on import — API returns masked values
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
