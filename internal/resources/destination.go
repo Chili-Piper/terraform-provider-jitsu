@@ -3,9 +3,9 @@ package resources
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/chilipiper/terraform-provider-jitsu/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
 var (
@@ -25,6 +26,7 @@ type destinationResource struct {
 	client *client.Client
 }
 
+// Typed models for extracting nested object values via As().
 type clickhouseModel struct {
 	Protocol types.String `tfsdk:"protocol"`
 	Hosts    types.List   `tfsdk:"hosts"`
@@ -40,18 +42,51 @@ type bigqueryModel struct {
 	BQDataset   types.String `tfsdk:"bq_dataset"`
 }
 
-type destinationModel struct {
-	WorkspaceID     types.String     `tfsdk:"workspace_id"`
-	ID              types.String     `tfsdk:"id"`
-	Name            types.String     `tfsdk:"name"`
-	DestinationType types.String     `tfsdk:"destination_type"`
-	ClickHouse      *clickhouseModel `tfsdk:"clickhouse"`
-	BigQuery        *bigqueryModel   `tfsdk:"bigquery"`
+// Attribute type maps for constructing types.Object values.
+var clickhouseAttrTypes = map[string]attr.Type{
+	"protocol": types.StringType,
+	"hosts":    types.ListType{ElemType: types.StringType},
+	"username": types.StringType,
+	"password": types.StringType,
+	"database": types.StringType,
+	"cluster":  types.StringType,
 }
 
-type destinationConfigIssue struct {
-	attribute string
-	detail    string
+var bigqueryAttrTypes = map[string]attr.Type{
+	"credentials": types.StringType,
+	"project_id":  types.StringType,
+	"bq_dataset":  types.StringType,
+}
+
+// destinationModel uses types.Object for nested attributes so the framework
+// can handle null, unknown, and concrete values at all lifecycle stages
+// (validate, plan, apply). Use clickhouse() / bigquery() to extract the
+// typed models when values are known.
+type destinationModel struct {
+	WorkspaceID     types.String `tfsdk:"workspace_id"`
+	ID              types.String `tfsdk:"id"`
+	Name            types.String `tfsdk:"name"`
+	DestinationType types.String `tfsdk:"destination_type"`
+	ClickHouse      types.Object `tfsdk:"clickhouse"`
+	BigQuery        types.Object `tfsdk:"bigquery"`
+}
+
+func (m *destinationModel) clickhouse(ctx context.Context) (*clickhouseModel, diag.Diagnostics) {
+	if m.ClickHouse.IsNull() || m.ClickHouse.IsUnknown() {
+		return nil, nil
+	}
+	var ch clickhouseModel
+	diags := m.ClickHouse.As(ctx, &ch, basetypes.ObjectAsOptions{})
+	return &ch, diags
+}
+
+func (m *destinationModel) bigquery(ctx context.Context) (*bigqueryModel, diag.Diagnostics) {
+	if m.BigQuery.IsNull() || m.BigQuery.IsUnknown() {
+		return nil, nil
+	}
+	var bq bigqueryModel
+	diags := m.BigQuery.As(ctx, &bq, basetypes.ObjectAsOptions{})
+	return &bq, diags
 }
 
 func NewDestinationResource() resource.Resource {
@@ -154,77 +189,93 @@ func (r *destinationResource) ValidateConfig(ctx context.Context, req resource.V
 		return
 	}
 
-	for _, issue := range destinationConfigIssues(&config) {
+	// For each nested block, determine whether it is definitively set,
+	// definitively absent (null), or unknown. We only skip individual
+	// checks that depend on an unknown value — everything else is still
+	// validated at plan time.
+	chSet := !config.ClickHouse.IsNull() && !config.ClickHouse.IsUnknown()
+	chNull := config.ClickHouse.IsNull()
+	bqSet := !config.BigQuery.IsNull() && !config.BigQuery.IsUnknown()
+	bqNull := config.BigQuery.IsNull()
+
+	// Both blocks set is always invalid regardless of destination_type.
+	if chSet && bqSet {
 		resp.Diagnostics.AddAttributeError(
-			path.Root(issue.attribute),
+			path.Root("bigquery"),
 			"Invalid destination configuration",
-			issue.detail,
+			"Only one destination config block may be set. Choose either clickhouse or bigquery to match destination_type.",
+		)
+	}
+
+	// Without a known destination_type we can't do type-specific checks.
+	if config.DestinationType.IsNull() || config.DestinationType.IsUnknown() {
+		return
+	}
+
+	isBigQuery := config.DestinationType.ValueString() == "bigquery"
+
+	if isBigQuery {
+		// Missing bigquery block — flag when definitively null (not unknown).
+		if bqNull {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("bigquery"),
+				"Invalid destination configuration",
+				"BigQuery destinations must define the bigquery block.",
+			)
+		}
+		// Extra clickhouse block — flag when definitively set (not unknown).
+		if chSet {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("clickhouse"),
+				"Invalid destination configuration",
+				"BigQuery destinations cannot define the clickhouse block.",
+			)
+		}
+		return
+	}
+
+	// Non-bigquery: missing clickhouse block — flag when definitively null.
+	if chNull {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("clickhouse"),
+			"Invalid destination configuration",
+			fmt.Sprintf("%q destinations must define the clickhouse block.", config.DestinationType.ValueString()),
+		)
+	}
+	// Non-bigquery: extra bigquery block — flag when definitively set.
+	if bqSet {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("bigquery"),
+			"Invalid destination configuration",
+			fmt.Sprintf("%q destinations cannot define the bigquery block.", config.DestinationType.ValueString()),
 		)
 	}
 }
 
-func destinationConfigIssues(config *destinationModel) []destinationConfigIssue {
-	if config == nil {
-		return nil
-	}
-
-	hasClickHouse := config.ClickHouse != nil
-	hasBigQuery := config.BigQuery != nil
-
-	if config.DestinationType.IsNull() || config.DestinationType.IsUnknown() {
-		if hasClickHouse && hasBigQuery {
-			return []destinationConfigIssue{
-				{
-					attribute: "bigquery",
-					detail:    "Only one destination config block may be set. Choose either clickhouse or bigquery to match destination_type.",
-				},
-			}
-		}
-		return nil
-	}
-
-	isBigQuery := config.DestinationType.ValueString() == "bigquery"
-	issues := make([]destinationConfigIssue, 0, 2)
-
-	if isBigQuery {
-		if !hasBigQuery {
-			issues = append(issues, destinationConfigIssue{
-				attribute: "bigquery",
-				detail:    "BigQuery destinations must define the bigquery block.",
-			})
-		}
-		if hasClickHouse {
-			issues = append(issues, destinationConfigIssue{
-				attribute: "clickhouse",
-				detail:    "BigQuery destinations cannot define the clickhouse block.",
-			})
-		}
-		return issues
-	}
-
-	if !hasClickHouse {
-		issues = append(issues, destinationConfigIssue{
-			attribute: "clickhouse",
-			detail:    fmt.Sprintf("%q destinations must define the clickhouse block.", config.DestinationType.ValueString()),
-		})
-	}
-	if hasBigQuery {
-		issues = append(issues, destinationConfigIssue{
-			attribute: "bigquery",
-			detail:    fmt.Sprintf("%q destinations cannot define the bigquery block.", config.DestinationType.ValueString()),
-		})
-	}
-
-	return issues
-}
-
 func (r *destinationResource) buildPayload(ctx context.Context, plan *destinationModel) (map[string]interface{}, error) {
-	if issues := destinationConfigIssues(plan); len(issues) > 0 {
-		details := make([]string, 0, len(issues))
-		for _, issue := range issues {
-			details = append(details, issue.detail)
-		}
-		return nil, fmt.Errorf("invalid destination configuration: %s", strings.Join(details, " "))
+	// Defense-in-depth: ValidateConfig may have skipped checks when values
+	// were unknown. At plan/apply time all values are concrete, so validate
+	// the block/type combination here as a safety net.
+	ch, diags := plan.clickhouse(ctx)
+	if diags.HasError() {
+		return nil, fmt.Errorf("reading clickhouse config: %v", diags.Errors())
+	}
+	bq, diags := plan.bigquery(ctx)
+	if diags.HasError() {
+		return nil, fmt.Errorf("reading bigquery config: %v", diags.Errors())
+	}
+	isBigQuery := plan.DestinationType.ValueString() == "bigquery"
+	if isBigQuery && bq == nil {
+		return nil, fmt.Errorf("BigQuery destinations must define the bigquery block")
+	}
+	if isBigQuery && ch != nil {
+		return nil, fmt.Errorf("BigQuery destinations cannot define the clickhouse block")
+	}
+	if !isBigQuery && ch == nil {
+		return nil, fmt.Errorf("%q destinations must define the clickhouse block", plan.DestinationType.ValueString())
+	}
+	if !isBigQuery && bq != nil {
+		return nil, fmt.Errorf("%q destinations cannot define the bigquery block", plan.DestinationType.ValueString())
 	}
 
 	payload := map[string]interface{}{
@@ -235,13 +286,13 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 		"destinationType": plan.DestinationType.ValueString(),
 	}
 
-	if ch := plan.ClickHouse; ch != nil {
+	if ch != nil {
 		if !ch.Protocol.IsNull() && !ch.Protocol.IsUnknown() {
 			payload["protocol"] = ch.Protocol.ValueString()
 		}
 		var hosts []string
-		if diags := ch.Hosts.ElementsAs(ctx, &hosts, false); diags.HasError() {
-			return nil, fmt.Errorf("reading hosts: %v", diags.Errors())
+		if d := ch.Hosts.ElementsAs(ctx, &hosts, false); d.HasError() {
+			return nil, fmt.Errorf("reading hosts: %v", d.Errors())
 		}
 		payload["hosts"] = hosts
 		if !ch.Username.IsNull() && !ch.Username.IsUnknown() {
@@ -258,7 +309,7 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 		}
 	}
 
-	if bq := plan.BigQuery; bq != nil {
+	if bq != nil {
 		payload["credentials"] = bq.Credentials.ValueString()
 		payload["projectId"] = bq.ProjectID.ValueString()
 		payload["bqDataset"] = bq.BQDataset.ValueString()
@@ -304,9 +355,11 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 	switch destType {
 	case "bigquery":
 		bq := &bigqueryModel{}
-		// Credentials: API returns masked value — preserve state value
-		if state.BigQuery != nil {
-			bq.Credentials = state.BigQuery.Credentials
+		// Credentials: API returns masked value — preserve state value.
+		oldBQ, d := state.bigquery(ctx)
+		diags.Append(d...)
+		if oldBQ != nil {
+			bq.Credentials = oldBQ.Credentials
 		}
 		if v, ok := result["projectId"].(string); ok {
 			bq.ProjectID = types.StringValue(v)
@@ -314,8 +367,10 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		if v, ok := result["bqDataset"].(string); ok {
 			bq.BQDataset = types.StringValue(v)
 		}
-		state.BigQuery = bq
-		state.ClickHouse = nil
+		objVal, d := types.ObjectValueFrom(ctx, bigqueryAttrTypes, bq)
+		diags.Append(d...)
+		state.BigQuery = objVal
+		state.ClickHouse = types.ObjectNull(clickhouseAttrTypes)
 
 	default:
 		ch := &clickhouseModel{}
@@ -346,9 +401,11 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		} else {
 			ch.Username = types.StringNull()
 		}
-		// Password: API returns masked value — preserve state value
-		if state.ClickHouse != nil {
-			ch.Password = state.ClickHouse.Password
+		// Password: API returns masked value — preserve state value.
+		oldCH, d := state.clickhouse(ctx)
+		diags.Append(d...)
+		if oldCH != nil {
+			ch.Password = oldCH.Password
 		}
 		if v, ok := result["database"].(string); ok {
 			ch.Database = types.StringValue(v)
@@ -360,8 +417,10 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		} else {
 			ch.Cluster = types.StringNull()
 		}
-		state.ClickHouse = ch
-		state.BigQuery = nil
+		objVal, d := types.ObjectValueFrom(ctx, clickhouseAttrTypes, ch)
+		diags.Append(d...)
+		state.ClickHouse = objVal
+		state.BigQuery = types.ObjectNull(bigqueryAttrTypes)
 	}
 
 	return diags
@@ -442,6 +501,8 @@ func (r *destinationResource) ImportState(ctx context.Context, req resource.Impo
 	state := destinationModel{
 		WorkspaceID: types.StringValue(parts[0]),
 		ID:          types.StringValue(parts[1]),
+		ClickHouse:  types.ObjectNull(clickhouseAttrTypes),
+		BigQuery:    types.ObjectNull(bigqueryAttrTypes),
 	}
 	resp.Diagnostics.Append(r.readAPIIntoState(ctx, result, &state)...)
 	// Password/credentials not available on import — API returns masked values

@@ -3,11 +3,28 @@ package resources
 import (
 	"context"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
+
+func mustClickhouseObject(t *testing.T, ctx context.Context, ch *clickhouseModel) types.Object {
+	t.Helper()
+	obj, diags := types.ObjectValueFrom(ctx, clickhouseAttrTypes, ch)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics building clickhouse object: %v", diags)
+	}
+	return obj
+}
+
+func mustBigqueryObject(t *testing.T, ctx context.Context, bq *bigqueryModel) types.Object {
+	t.Helper()
+	obj, diags := types.ObjectValueFrom(ctx, bigqueryAttrTypes, bq)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics building bigquery object: %v", diags)
+	}
+	return obj
+}
 
 func TestDestinationReadAPIIntoState_ClearsAbsentOptionalFields(t *testing.T) {
 	ctx := context.Background()
@@ -18,13 +35,14 @@ func TestDestinationReadAPIIntoState_ClearsAbsentOptionalFields(t *testing.T) {
 	}
 
 	state := destinationModel{
-		ClickHouse: &clickhouseModel{
+		ClickHouse: mustClickhouseObject(t, ctx, &clickhouseModel{
 			Protocol: types.StringValue("http"),
 			Username: types.StringValue("reporting"),
 			Database: types.StringValue("default"),
 			Cluster:  types.StringValue("default"),
 			Hosts:    existingHosts,
-		},
+		}),
+		BigQuery: types.ObjectNull(bigqueryAttrTypes),
 	}
 
 	result := map[string]interface{}{
@@ -38,9 +56,12 @@ func TestDestinationReadAPIIntoState_ClearsAbsentOptionalFields(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
 
-	ch := state.ClickHouse
+	ch, d := state.clickhouse(ctx)
+	if d.HasError() {
+		t.Fatalf("unexpected diagnostics extracting clickhouse: %v", d)
+	}
 	if ch == nil {
-		t.Fatal("clickhouse block should be set")
+		t.Fatal("clickhouse should be set")
 	}
 	if !ch.Protocol.IsNull() {
 		t.Fatalf("protocol should be null, got %v", ch.Protocol)
@@ -64,8 +85,8 @@ func TestDestinationReadAPIIntoState_ClearsAbsentOptionalFields(t *testing.T) {
 		t.Fatalf("hosts mismatch: got %v", hosts)
 	}
 
-	if state.BigQuery != nil {
-		t.Fatal("bigquery block should be nil for clickhouse destination")
+	if !state.BigQuery.IsNull() {
+		t.Fatal("bigquery should be null for clickhouse destination")
 	}
 }
 
@@ -78,9 +99,10 @@ func TestDestinationReadAPIIntoState_NullsHostsWhenMissing(t *testing.T) {
 	}
 
 	state := destinationModel{
-		ClickHouse: &clickhouseModel{
+		ClickHouse: mustClickhouseObject(t, ctx, &clickhouseModel{
 			Hosts: existingHosts,
-		},
+		}),
+		BigQuery: types.ObjectNull(bigqueryAttrTypes),
 	}
 
 	result := map[string]interface{}{
@@ -93,8 +115,15 @@ func TestDestinationReadAPIIntoState_NullsHostsWhenMissing(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
 
-	if state.ClickHouse.Hosts.IsNull() != true {
-		t.Fatalf("hosts should be null when API does not return hosts, got %v", state.ClickHouse.Hosts)
+	ch, d := state.clickhouse(ctx)
+	if d.HasError() {
+		t.Fatalf("unexpected diagnostics extracting clickhouse: %v", d)
+	}
+	if ch == nil {
+		t.Fatal("clickhouse should be set")
+	}
+	if !ch.Hosts.IsNull() {
+		t.Fatalf("hosts should be null when API does not return hosts, got %v", ch.Hosts)
 	}
 }
 
@@ -102,9 +131,10 @@ func TestDestinationReadAPIIntoState_BigQuery(t *testing.T) {
 	ctx := context.Background()
 
 	state := destinationModel{
-		BigQuery: &bigqueryModel{
+		ClickHouse: types.ObjectNull(clickhouseAttrTypes),
+		BigQuery: mustBigqueryObject(t, ctx, &bigqueryModel{
 			Credentials: types.StringValue("secret-json-key"),
-		},
+		}),
 	}
 
 	result := map[string]interface{}{
@@ -120,9 +150,12 @@ func TestDestinationReadAPIIntoState_BigQuery(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
 
-	bq := state.BigQuery
+	bq, d := state.bigquery(ctx)
+	if d.HasError() {
+		t.Fatalf("unexpected diagnostics extracting bigquery: %v", d)
+	}
 	if bq == nil {
-		t.Fatal("bigquery block should be set")
+		t.Fatal("bigquery should be set")
 	}
 	if bq.ProjectID.ValueString() != "my-project" {
 		t.Fatalf("project_id mismatch: got %q", bq.ProjectID.ValueString())
@@ -130,88 +163,96 @@ func TestDestinationReadAPIIntoState_BigQuery(t *testing.T) {
 	if bq.BQDataset.ValueString() != "my_dataset" {
 		t.Fatalf("bq_dataset mismatch: got %q", bq.BQDataset.ValueString())
 	}
-	// Credentials should be preserved from state, not overwritten with masked value
+	// Credentials should be preserved from state, not overwritten with masked value.
 	if bq.Credentials.ValueString() != "secret-json-key" {
 		t.Fatalf("credentials should be preserved from state, got %q", bq.Credentials.ValueString())
 	}
 
-	if state.ClickHouse != nil {
-		t.Fatal("clickhouse block should be nil for bigquery destination")
+	if !state.ClickHouse.IsNull() {
+		t.Fatal("clickhouse should be null for bigquery destination")
 	}
 }
 
-func TestDestinationBuildPayload_RejectsInvalidBlockCombinations(t *testing.T) {
+func TestDestinationBuildPayload_ClickHouse(t *testing.T) {
 	ctx := context.Background()
 
-	clickhouseHosts, diags := types.ListValueFrom(ctx, types.StringType, []string{"clickhouse:8123"})
+	hosts, diags := types.ListValueFrom(ctx, types.StringType, []string{"clickhouse:8123"})
 	if diags.HasError() {
-		t.Fatalf("unexpected diagnostics building clickhouse hosts: %v", diags)
+		t.Fatalf("unexpected diagnostics building hosts: %v", diags)
 	}
 
-	tests := []struct {
-		name    string
-		plan    destinationModel
-		wantErr string
-	}{
-		{
-			name: "bigquery requires bigquery block",
-			plan: destinationModel{
-				WorkspaceID:     types.StringValue("workspace-id"),
-				ID:              types.StringValue("destination-id"),
-				Name:            types.StringValue("Destination"),
-				DestinationType: types.StringValue("bigquery"),
-			},
-			wantErr: "BigQuery destinations must define the bigquery block.",
-		},
-		{
-			name: "clickhouse destinations require clickhouse block",
-			plan: destinationModel{
-				WorkspaceID:     types.StringValue("workspace-id"),
-				ID:              types.StringValue("destination-id"),
-				Name:            types.StringValue("Destination"),
-				DestinationType: types.StringValue("clickhouse"),
-			},
-			wantErr: "\"clickhouse\" destinations must define the clickhouse block.",
-		},
-		{
-			name: "bigquery destinations reject clickhouse block",
-			plan: destinationModel{
-				WorkspaceID:     types.StringValue("workspace-id"),
-				ID:              types.StringValue("destination-id"),
-				Name:            types.StringValue("Destination"),
-				DestinationType: types.StringValue("bigquery"),
-				ClickHouse: &clickhouseModel{
-					Hosts: clickhouseHosts,
-				},
-			},
-			wantErr: "BigQuery destinations cannot define the clickhouse block.",
-		},
-		{
-			name: "clickhouse destinations reject bigquery block",
-			plan: destinationModel{
-				WorkspaceID:     types.StringValue("workspace-id"),
-				ID:              types.StringValue("destination-id"),
-				Name:            types.StringValue("Destination"),
-				DestinationType: types.StringValue("clickhouse"),
-				BigQuery: &bigqueryModel{
-					Credentials: types.StringValue("credentials"),
-					ProjectID:   types.StringValue("project-id"),
-					BQDataset:   types.StringValue("dataset"),
-				},
-			},
-			wantErr: "\"clickhouse\" destinations cannot define the bigquery block.",
-		},
+	plan := destinationModel{
+		WorkspaceID:     types.StringValue("workspace-id"),
+		ID:              types.StringValue("destination-id"),
+		Name:            types.StringValue("ClickHouse"),
+		DestinationType: types.StringValue("clickhouse"),
+		ClickHouse: mustClickhouseObject(t, ctx, &clickhouseModel{
+			Protocol: types.StringValue("http"),
+			Hosts:    hosts,
+			Username: types.StringValue("reporting"),
+			Password: types.StringValue("secret"),
+			Database: types.StringValue("default"),
+			Cluster:  types.StringValue("default"),
+		}),
+		BigQuery: types.ObjectNull(bigqueryAttrTypes),
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := (&destinationResource{}).buildPayload(ctx, &tt.plan)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("expected error to contain %q, got %q", tt.wantErr, err.Error())
-			}
-		})
+	payload, err := (&destinationResource{}).buildPayload(ctx, &plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if payload["protocol"] != "http" {
+		t.Fatalf("protocol mismatch: got %v", payload["protocol"])
+	}
+	if payload["username"] != "reporting" {
+		t.Fatalf("username mismatch: got %v", payload["username"])
+	}
+	if payload["password"] != "secret" {
+		t.Fatalf("password mismatch: got %v", payload["password"])
+	}
+	if payload["database"] != "default" {
+		t.Fatalf("database mismatch: got %v", payload["database"])
+	}
+	if payload["cluster"] != "default" {
+		t.Fatalf("cluster mismatch: got %v", payload["cluster"])
+	}
+	if _, ok := payload["credentials"]; ok {
+		t.Fatal("credentials should not be set for clickhouse destination")
+	}
+}
+
+func TestDestinationBuildPayload_BigQuery(t *testing.T) {
+	ctx := context.Background()
+
+	plan := destinationModel{
+		WorkspaceID:     types.StringValue("workspace-id"),
+		ID:              types.StringValue("destination-id"),
+		Name:            types.StringValue("BigQuery"),
+		DestinationType: types.StringValue("bigquery"),
+		ClickHouse:      types.ObjectNull(clickhouseAttrTypes),
+		BigQuery: mustBigqueryObject(t, ctx, &bigqueryModel{
+			Credentials: types.StringValue("json-key"),
+			ProjectID:   types.StringValue("my-project"),
+			BQDataset:   types.StringValue("my_dataset"),
+		}),
+	}
+
+	payload, err := (&destinationResource{}).buildPayload(ctx, &plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if payload["credentials"] != "json-key" {
+		t.Fatalf("credentials mismatch: got %v", payload["credentials"])
+	}
+	if payload["projectId"] != "my-project" {
+		t.Fatalf("projectId mismatch: got %v", payload["projectId"])
+	}
+	if payload["bqDataset"] != "my_dataset" {
+		t.Fatalf("bqDataset mismatch: got %v", payload["bqDataset"])
+	}
+	if _, ok := payload["hosts"]; ok {
+		t.Fatal("hosts should not be set for bigquery destination")
 	}
 }
