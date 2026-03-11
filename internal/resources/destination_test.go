@@ -140,9 +140,9 @@ func TestDestinationReadAPIIntoState_BigQuery(t *testing.T) {
 	result := map[string]interface{}{
 		"name":            "BQ Destination",
 		"destinationType": "bigquery",
-		"projectId":       "my-project",
-		"bqDataset":       "my_dataset",
-		"credentials":     "__MASKED_BY_JITSU__",
+		"project":   "my-project",
+		"bqDataset": "my_dataset",
+		"keyFile":   "__MASKED_BY_JITSU__",
 	}
 
 	diags := (&destinationResource{}).readAPIIntoState(ctx, result, &state)
@@ -243,11 +243,11 @@ func TestDestinationBuildPayload_BigQuery(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if payload["credentials"] != "json-key" {
-		t.Fatalf("credentials mismatch: got %v", payload["credentials"])
+	if payload["keyFile"] != "json-key" {
+		t.Fatalf("keyFile mismatch: got %v", payload["keyFile"])
 	}
-	if payload["projectId"] != "my-project" {
-		t.Fatalf("projectId mismatch: got %v", payload["projectId"])
+	if payload["project"] != "my-project" {
+		t.Fatalf("project mismatch: got %v", payload["project"])
 	}
 	if payload["bqDataset"] != "my_dataset" {
 		t.Fatalf("bqDataset mismatch: got %v", payload["bqDataset"])

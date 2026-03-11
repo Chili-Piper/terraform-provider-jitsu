@@ -310,8 +310,8 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 	}
 
 	if bq != nil {
-		payload["credentials"] = bq.Credentials.ValueString()
-		payload["projectId"] = bq.ProjectID.ValueString()
+		payload["keyFile"] = bq.Credentials.ValueString()
+		payload["project"] = bq.ProjectID.ValueString()
 		payload["bqDataset"] = bq.BQDataset.ValueString()
 	}
 
@@ -355,13 +355,13 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 	switch destType {
 	case "bigquery":
 		bq := &bigqueryModel{}
-		// Credentials: API returns masked value — preserve state value.
+		// Credentials (keyFile): API returns masked value — preserve state value.
 		oldBQ, d := state.bigquery(ctx)
 		diags.Append(d...)
 		if oldBQ != nil {
 			bq.Credentials = oldBQ.Credentials
 		}
-		if v, ok := result["projectId"].(string); ok {
+		if v, ok := result["project"].(string); ok {
 			bq.ProjectID = types.StringValue(v)
 		}
 		if v, ok := result["bqDataset"].(string); ok {
