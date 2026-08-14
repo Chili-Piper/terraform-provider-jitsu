@@ -1,0 +1,8 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "github>Chili-Piper/renovate//config/go",
+    "github>int128/go-renovate-config:go-version"
+  ]
+}

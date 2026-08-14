@@ -1,0 +1,15 @@
+name: Auto approve
+
+on: pull_request_target
+
+jobs:
+  auto-approve:
+    runs-on: [cp-small]
+    permissions:
+      pull-requests: write
+    if: |
+      github.actor == 'dependabot[bot]' ||
+      github.actor == 'renovate[bot]' ||
+      github.actor == 'renovate-chili-piper[bot]'
+    steps:
+      - uses: hmarr/auto-approve-action@v4
