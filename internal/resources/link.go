@@ -348,8 +348,9 @@ func readLinkIntoState(ctx context.Context, link map[string]interface{}, state *
 		state.KeepOriginalNames = types.BoolNull()
 	}
 
-	// Transform function IDs: strip udf. prefix
-	if funcs, ok := data["functions"].([]interface{}); ok && len(funcs) > 0 {
+	// Transform function IDs: strip udf. prefix. A present-but-empty functions key
+	// must round-trip as an empty list, not null, or refresh plans updates forever.
+	if funcs, ok := data["functions"].([]interface{}); ok {
 		funcIDs := make([]string, 0, len(funcs))
 		for _, f := range funcs {
 			if fm, ok := f.(map[string]interface{}); ok {
@@ -357,10 +358,6 @@ func readLinkIntoState(ctx context.Context, link map[string]interface{}, state *
 					funcIDs = append(funcIDs, strings.TrimPrefix(fid, "udf."))
 				}
 			}
-		}
-		if len(funcIDs) == 0 {
-			state.Functions = types.ListNull(types.StringType)
-			return diags
 		}
 		funcList, d := types.ListValueFrom(ctx, types.StringType, funcIDs)
 		diags.Append(d...)
@@ -394,9 +391,16 @@ func (r *linkResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 }
 
 func (r *linkResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan linkModel
+	var plan, state linkModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	linkID := state.ID.ValueString()
+	if linkID == "" {
+		resp.Diagnostics.AddError("Missing link ID", "Cannot update a link without its ID in state")
 		return
 	}
 
@@ -406,19 +410,26 @@ func (r *linkResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	// The Console link endpoint upserts push links by (workspaceId, fromId, toId):
-	// posting again updates the existing link's data in place and keeps its id,
-	// so the Kafka topics and consumer groups derived from it survive the change.
+	// The Console link endpoint rejects a POST for an existing push link unless the
+	// body carries its id; with it, the data updates in place and the id survives,
+	// so the Kafka topics and consumer groups derived from it are untouched.
+	payload["id"] = linkID
+
 	result, err := r.client.Create(ctx, plan.WorkspaceID.ValueString(), "link", payload)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating link", err.Error())
 		return
 	}
 
-	if id, ok := result["id"].(string); ok {
-		plan.ID = types.StringValue(id)
+	if returnedID, _ := result["id"].(string); returnedID != linkID {
+		resp.Diagnostics.AddError(
+			"Link replaced during update",
+			fmt.Sprintf("Console returned link ID %q, expected %q; the link was likely recreated out-of-band", returnedID, linkID),
+		)
+		return
 	}
 
+	plan.ID = types.StringValue(linkID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

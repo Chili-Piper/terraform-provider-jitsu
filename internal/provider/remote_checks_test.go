@@ -457,6 +457,84 @@ func testAccCheckLinkRemote(
 	}
 }
 
+func testAccCheckLinkRemoteFunctions(resourceName string, expectedFunctionIDs ...string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, err := testAccGetResourceState(s, resourceName)
+		if err != nil {
+			return err
+		}
+		workspaceID, err := testAccRequiredAttr(rs, "workspace_id")
+		if err != nil {
+			return err
+		}
+		fromID, err := testAccRequiredAttr(rs, "from_id")
+		if err != nil {
+			return err
+		}
+		toID, err := testAccRequiredAttr(rs, "to_id")
+		if err != nil {
+			return err
+		}
+
+		want := make([]string, 0, len(expectedFunctionIDs))
+		for _, id := range expectedFunctionIDs {
+			want = append(want, "udf."+id)
+		}
+
+		c := testAccRemoteClient()
+		defer c.Close()
+
+		return testAccWithRetry("link remote functions check", func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			links, err := c.List(ctx, workspaceID, "link")
+			if err != nil {
+				return err
+			}
+
+			var found map[string]interface{}
+			for _, link := range links {
+				f, _ := link["fromId"].(string)
+				t, _ := link["toId"].(string)
+				deleted, _ := link["deleted"].(bool)
+				if f == fromID && t == toID && !deleted {
+					found = link
+					break
+				}
+			}
+			if found == nil {
+				return fmt.Errorf("active link from %q to %q not found in workspace %q", fromID, toID, workspaceID)
+			}
+
+			data, _ := found["data"].(map[string]interface{})
+			if data == nil {
+				return fmt.Errorf("link data is missing")
+			}
+
+			rawFuncs, _ := data["functions"].([]interface{})
+			got := make([]string, 0, len(rawFuncs))
+			for _, f := range rawFuncs {
+				if fm, ok := f.(map[string]interface{}); ok {
+					if fid, ok := fm["functionId"].(string); ok {
+						got = append(got, fid)
+					}
+				}
+			}
+
+			if len(got) != len(want) {
+				return fmt.Errorf("link functions mismatch: got %v want %v", got, want)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					return fmt.Errorf("link functions mismatch: got %v want %v", got, want)
+				}
+			}
+			return nil
+		})
+	}
+}
+
 func isNotFoundError(err error) bool {
 	if err == nil {
 		return false

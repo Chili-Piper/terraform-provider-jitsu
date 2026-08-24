@@ -62,13 +62,29 @@ func TestAccLink_basic(t *testing.T) {
 			},
 			// Attach a function in place
 			{
-				Config:           testAccLinkConfigWithFunction(t, suffix, streamID, destinationID, functionID),
+				Config:           testAccLinkConfigWithFunction(t, suffix, streamID, destinationID, functionID, true),
 				ConfigPlanChecks: expectInPlaceUpdate,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("jitsu_link.test", "functions.#", "1"),
 					resource.TestCheckResourceAttr("jitsu_link.test", "functions.0", functionID),
 					sameLinkID,
+					testAccCheckLinkRemoteFunctions("jitsu_link.test", functionID),
 				),
+			},
+			// Detach all functions in place; empty list must round-trip
+			{
+				Config:           testAccLinkConfigWithFunction(t, suffix, streamID, destinationID, functionID, false),
+				ConfigPlanChecks: expectInPlaceUpdate,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("jitsu_link.test", "functions.#", "0"),
+					sameLinkID,
+					testAccCheckLinkRemoteFunctions("jitsu_link.test"),
+				),
+			},
+			// Empty functions list must not plan further changes
+			{
+				Config:   testAccLinkConfigWithFunction(t, suffix, streamID, destinationID, functionID, false),
+				PlanOnly: true,
 			},
 			// Import by workspace_id/from_id/to_id
 			{
@@ -133,8 +149,12 @@ resource "jitsu_link" "test" {
 `, providerConfig, testAccWorkspaceName("TF Link Workspace", suffix), testAccWorkspaceSlug("tf-acc-link", suffix), streamID, destinationID, batchSize)
 }
 
-func testAccLinkConfigWithFunction(t *testing.T, suffix, streamID, destinationID, functionID string) string {
+func testAccLinkConfigWithFunction(t *testing.T, suffix, streamID, destinationID, functionID string, attach bool) string {
 	providerConfig := testAccProviderConfig(t)
+	functionsExpr := "[]"
+	if attach {
+		functionsExpr = "[jitsu_function.link_test.id]"
+	}
 	return fmt.Sprintf(`
 %s
 
@@ -184,7 +204,7 @@ resource "jitsu_link" "test" {
   schema_freeze       = false
   timestamp_column    = "timestamp"
   keep_original_names = false
-  functions           = [jitsu_function.link_test.id]
+  functions           = %[7]s
 }
-`, providerConfig, testAccWorkspaceName("TF Link Workspace", suffix), testAccWorkspaceSlug("tf-acc-link", suffix), streamID, destinationID, functionID)
+`, providerConfig, testAccWorkspaceName("TF Link Workspace", suffix), testAccWorkspaceSlug("tf-acc-link", suffix), streamID, destinationID, functionID, functionsExpr)
 }
