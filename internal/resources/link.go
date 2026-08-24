@@ -9,9 +9,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -55,7 +52,9 @@ func (r *linkResource) Metadata(_ context.Context, req resource.MetadataRequest,
 func (r *linkResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "Manages a Jitsu link (connects a stream to a destination). " +
-			"The Jitsu link API has no update endpoint, so any attribute change triggers a destroy+create.",
+			"The Console link endpoint upserts push links by (workspace_id, from_id, to_id), so settings and " +
+			"functions update in place, keeping the link ID and its Kafka topics. Only changing " +
+			"workspace_id/from_id/to_id replaces the link.",
 		Attributes: map[string]schema.Attribute{
 			"workspace_id": schema.StringAttribute{
 				Required:    true,
@@ -88,80 +87,47 @@ func (r *linkResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"mode": schema.StringAttribute{
 				Optional:    true,
 				Description: "Delivery mode (e.g., batch, stream).",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"data_layout": schema.StringAttribute{
 				Optional:    true,
 				Description: "Data layout (e.g., segment-single-table).",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"primary_key": schema.StringAttribute{
 				Optional:    true,
 				Description: "Comma-separated primary key columns.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"frequency": schema.Int64Attribute{
 				Optional:    true,
 				Description: "Batch frequency in minutes.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
-				},
 			},
 			"batch_size": schema.Int64Attribute{
 				Optional:    true,
 				Description: "Maximum batch size.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
-				},
 			},
 			"deduplicate": schema.BoolAttribute{
 				Optional:    true,
 				Description: "Enable deduplication.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.RequiresReplace(),
-				},
 			},
 			"deduplicate_window": schema.Int64Attribute{
 				Optional:    true,
 				Description: "Deduplication window in days.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
-				},
 			},
 			"schema_freeze": schema.BoolAttribute{
 				Optional:    true,
 				Description: "Freeze schema (prevent new columns).",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.RequiresReplace(),
-				},
 			},
 			"timestamp_column": schema.StringAttribute{
 				Optional:    true,
 				Description: "Timestamp column name.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"keep_original_names": schema.BoolAttribute{
 				Optional:    true,
 				Description: "Keep original event property names (no snake_case conversion).",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.RequiresReplace(),
-				},
 			},
 			"functions": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
 				Description: "List of function IDs to apply. Provider adds udf. prefix automatically.",
-				PlanModifiers: []planmodifier.List{
-					listplanmodifier.RequiresReplace(),
-				},
 			},
 		},
 	}
@@ -427,9 +393,33 @@ func (r *linkResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *linkResource) Update(_ context.Context, _ resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// All attributes have RequiresReplace — this method should never be called.
-	resp.Diagnostics.AddError("Unexpected Update", "Link resources do not support in-place updates; all changes require replacement.")
+func (r *linkResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan linkModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	payload, err := r.buildPayload(ctx, &plan)
+	if err != nil {
+		resp.Diagnostics.AddError("Error building payload", err.Error())
+		return
+	}
+
+	// The Console link endpoint upserts push links by (workspaceId, fromId, toId):
+	// posting again updates the existing link's data in place and keeps its id,
+	// so the Kafka topics and consumer groups derived from it survive the change.
+	result, err := r.client.Create(ctx, plan.WorkspaceID.ValueString(), "link", payload)
+	if err != nil {
+		resp.Diagnostics.AddError("Error updating link", err.Error())
+		return
+	}
+
+	if id, ok := result["id"].(string); ok {
+		plan.ID = types.StringValue(id)
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *linkResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
