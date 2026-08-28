@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "postUpdateOptions": ["gomodTidy"],
+  "packageRules": [
+    {
+      "description": "The terraform-plugin-* modules share protocol interfaces and must move in lockstep",
+      "matchPackageNames": ["github.com/hashicorp/terraform-plugin-*"],
+      "groupName": "terraform-plugin modules"
+    }
+  ]
+}
