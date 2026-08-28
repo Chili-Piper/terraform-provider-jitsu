@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "postUpdateOptions": ["gomodTidy"],
+  "prConcurrentLimit": 5,
   "packageRules": [
     {
       "description": "The terraform-plugin-* modules share protocol interfaces and must move in lockstep",
