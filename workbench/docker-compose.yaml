@@ -46,7 +46,7 @@ services:
       - jitsu_tfacc_clickhouse_data:/var/lib/clickhouse
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: jitsu-tfacc-redis
     ports:
       - "6379:6379"
