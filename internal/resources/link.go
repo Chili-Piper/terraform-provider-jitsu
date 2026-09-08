@@ -410,6 +410,27 @@ func (r *linkResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
+	remote, err := r.findLinkByID(ctx, state.WorkspaceID.ValueString(), linkID)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading link before update", err.Error())
+		return
+	}
+	if remote == nil {
+		resp.Diagnostics.AddError("Link not found", "The link no longer exists; refresh the plan before applying")
+		return
+	}
+	data, _ := remote["data"].(map[string]interface{})
+	if data == nil {
+		data = map[string]interface{}{}
+	}
+	for _, key := range []string{"mode", "dataLayout", "primaryKey", "frequency", "batchSize", "deduplicate", "deduplicateWindow", "schemaFreeze", "timestampColumn", "keepOriginalNames", "functions"} {
+		delete(data, key)
+	}
+	for key, value := range payload["data"].(map[string]interface{}) {
+		data[key] = value
+	}
+	payload["data"] = data
+
 	// The Console link endpoint rejects a POST for an existing push link unless the
 	// body carries its id; with it, the data updates in place and the id survives,
 	// so the Kafka topics and consumer groups derived from it are untouched.
