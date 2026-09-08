@@ -423,6 +423,10 @@ func (r *linkResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	if data == nil {
 		data = map[string]interface{}{}
 	}
+	plannedData := payload["data"].(map[string]interface{})
+	if functions, ok := plannedData["functions"].([]map[string]string); ok {
+		plannedData["functions"] = preserveFunctionSettings(functions, data["functions"])
+	}
 	for _, key := range []string{"mode", "dataLayout", "primaryKey", "frequency", "batchSize", "deduplicate", "deduplicateWindow", "schemaFreeze", "timestampColumn", "keepOriginalNames", "functions"} {
 		delete(data, key)
 	}
@@ -490,4 +494,28 @@ func (r *linkResource) ImportState(ctx context.Context, req resource.ImportState
 	}
 	resp.Diagnostics.Append(readLinkIntoState(ctx, link, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+func preserveFunctionSettings(planned []map[string]string, remote interface{}) []map[string]interface{} {
+	existing := map[string][]map[string]interface{}{}
+	if functions, ok := remote.([]interface{}); ok {
+		for _, value := range functions {
+			if function, ok := value.(map[string]interface{}); ok {
+				id, _ := function["functionId"].(string)
+				existing[id] = append(existing[id], function)
+			}
+		}
+	}
+	functions := make([]map[string]interface{}, len(planned))
+	for i, function := range planned {
+		id := function["functionId"]
+		functions[i] = map[string]interface{}{"functionId": id}
+		if matches := existing[id]; len(matches) > 0 {
+			for key, value := range matches[0] {
+				functions[i][key] = value
+			}
+			existing[id] = matches[1:]
+		}
+	}
+	return functions
 }

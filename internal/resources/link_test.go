@@ -143,3 +143,26 @@ func TestReadLinkIntoState_ParsesFields(t *testing.T) {
 		t.Fatalf("functions mismatch: got %v want %v", gotFunctions, wantFunctions)
 	}
 }
+
+func TestPreserveFunctionSettings(t *testing.T) {
+	remote := []interface{}{
+		map[string]interface{}{"functionId": "udf.first", "functionOptions": map[string]interface{}{"position": "one"}},
+		map[string]interface{}{"functionId": "udf.second", "functionOptions": map[string]interface{}{"position": "two"}},
+		map[string]interface{}{"functionId": "udf.first", "functionOptions": map[string]interface{}{"position": "three"}},
+		map[string]interface{}{"functionId": "udf.removed", "functionOptions": map[string]interface{}{"position": "removed"}},
+	}
+	got := preserveFunctionSettings([]map[string]string{{"functionId": "udf.second"}, {"functionId": "udf.first"}, {"functionId": "udf.first"}, {"functionId": "udf.new"}}, remote)
+	want := []map[string]interface{}{
+		remote[1].(map[string]interface{}), remote[0].(map[string]interface{}), remote[2].(map[string]interface{}), {"functionId": "udf.new"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reordering, duplicate occurrences, removal, and addition must preserve only matching options: %v", got)
+	}
+	if cleared := preserveFunctionSettings([]map[string]string{}, remote); cleared == nil || len(cleared) != 0 {
+		t.Fatal("clearing functions must return an explicit empty list")
+	}
+	got[0]["functionId"] = "changed"
+	if remote[1].(map[string]interface{})["functionId"] != "udf.second" {
+		t.Fatal("changed remote source map")
+	}
+}
