@@ -81,6 +81,8 @@ func (r *workspaceResource) Create(ctx context.Context, req resource.CreateReque
 	if err != nil {
 		rollbackErr := r.client.WorkspaceDelete(ctx, id)
 		if rollbackErr != nil {
+			plan.ID = types.StringValue(id)
+			resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 			resp.Diagnostics.AddError(
 				"Error finalizing workspace creation",
 				fmt.Sprintf("%s. Rollback failed for workspace %q: %s", err.Error(), id, rollbackErr.Error()),
