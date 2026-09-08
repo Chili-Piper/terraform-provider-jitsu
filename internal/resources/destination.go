@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
@@ -129,7 +130,9 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Attributes: map[string]schema.Attribute{
 					"protocol": schema.StringAttribute{
 						Optional:    true,
-						Description: "Connection protocol (e.g., http, https, tcp).",
+						Computed:    true,
+						Default:     stringdefault.StaticString("clickhouse-secure"),
+						Description: "Connection protocol (e.g., http, https, tcp). Defaults to clickhouse-secure.",
 					},
 					"hosts": schema.ListAttribute{
 						Required:    true,
@@ -138,7 +141,9 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 					},
 					"username": schema.StringAttribute{
 						Optional:    true,
-						Description: "Database username.",
+						Computed:    true,
+						Default:     stringdefault.StaticString("default"),
+						Description: "Database username. Defaults to default.",
 					},
 					"password": schema.StringAttribute{
 						Optional:    true,
@@ -147,10 +152,14 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 					},
 					"database": schema.StringAttribute{
 						Optional:    true,
-						Description: "Database name.",
+						Computed:    true,
+						Default:     stringdefault.StaticString("default"),
+						Description: "Database name. Defaults to default.",
 					},
 					"cluster": schema.StringAttribute{
 						Optional:    true,
+						Computed:    true,
+						Default:     stringdefault.StaticString(""),
 						Description: "ClickHouse cluster name. When set, Bulker creates tables with Replicated* engines for cross-replica data replication.",
 					},
 				},
@@ -448,8 +457,9 @@ func (r *destinationResource) Read(ctx context.Context, req resource.ReadRequest
 }
 
 func (r *destinationResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan destinationModel
+	var plan, state destinationModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -460,12 +470,36 @@ func (r *destinationResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
+	oldCH, diags := state.clickhouse(ctx)
+	resp.Diagnostics.Append(diags...)
+	newCH, diags := plan.clickhouse(ctx)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if oldCH != nil && newCH != nil {
+		if !oldCH.Password.IsNull() && newCH.Password.IsNull() {
+			payload["password"] = ""
+		}
+	}
+
 	_, err = r.client.Update(ctx, plan.WorkspaceID.ValueString(), "destination", plan.ID.ValueString(), payload)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating destination", err.Error())
 		return
 	}
 
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	result, err := r.client.Read(ctx, plan.WorkspaceID.ValueString(), "destination", plan.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading updated destination", err.Error())
+		return
+	}
+	if result == nil {
+		resp.Diagnostics.AddError("Updated destination not found", "Console did not return the destination after updating it")
+		return
+	}
+	resp.Diagnostics.Append(r.readAPIIntoState(ctx, result, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
