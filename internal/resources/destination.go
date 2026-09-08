@@ -148,7 +148,7 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 					"password": schema.StringAttribute{
 						Optional:    true,
 						Sensitive:   true,
-						Description: "Database password. API returns masked value; stored in state from user config.",
+						Description: "Database password. Omission on create uses an empty password. API returns masked value; stored in state from user config.",
 					},
 					"database": schema.StringAttribute{
 						Optional:    true,
@@ -338,6 +338,12 @@ func (r *destinationResource) Create(ctx context.Context, req resource.CreateReq
 	if err != nil {
 		resp.Diagnostics.AddError("Error building payload", err.Error())
 		return
+	}
+
+	if !plan.ClickHouse.IsNull() {
+		if _, configured := payload["password"]; !configured {
+			payload["password"] = ""
+		}
 	}
 
 	_, err = r.client.Create(ctx, plan.WorkspaceID.ValueString(), "destination", payload)

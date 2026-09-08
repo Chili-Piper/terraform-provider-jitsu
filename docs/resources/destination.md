@@ -40,7 +40,7 @@ resource "jitsu_destination" "clickhouse" {
 
 - `clickhouse.protocol` (String) - Connection protocol. Defaults to `clickhouse-secure`.
 - `clickhouse.username` (String) - Database username. Defaults to `default`.
-- `clickhouse.password` (String, Sensitive) - Database password. API returns masked value; stored in state from user config.
+- `clickhouse.password` (String, Sensitive) - Database password. Omission on create uses an empty password. API returns masked value; stored in state from user config.
 - `clickhouse.database` (String) - Database name. Defaults to `default`.
 - `clickhouse.cluster` (String) - ClickHouse cluster name. Defaults to an empty string (no cluster).
 
