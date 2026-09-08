@@ -6,6 +6,7 @@ import (
 
 	"github.com/chilipiper/terraform-provider-jitsu/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -241,7 +242,14 @@ func (r *streamResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if v, ok := result["name"].(string); ok {
 		state.Name = types.StringValue(v)
 	}
-	// Keys: API returns hashed values, not plaintext. Preserve state values.
+	var diags diag.Diagnostics
+	state.PublicKeys, diags = refreshStreamKeys(ctx, state.PublicKeys, result["publicKeys"])
+	resp.Diagnostics.Append(diags...)
+	state.PrivateKeys, diags = refreshStreamKeys(ctx, state.PrivateKeys, result["privateKeys"])
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -335,4 +343,42 @@ func (r *streamResource) ImportState(ctx context.Context, req resource.ImportSta
 	state.PrivateKeys = types.ListNull(types.ObjectType{AttrTypes: streamKeyAttrTypes})
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+func refreshStreamKeys(ctx context.Context, previous types.List, remote interface{}) (types.List, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if previous.IsNull() {
+		return previous, diags
+	}
+	var oldKeys []streamKeyModel
+	diags.Append(previous.ElementsAs(ctx, &oldKeys, false)...)
+	if diags.HasError() {
+		return previous, diags
+	}
+	plaintextByID := make(map[string]types.String, len(oldKeys))
+	for _, key := range oldKeys {
+		plaintextByID[key.ID.ValueString()] = key.Plaintext
+	}
+	remoteKeys, ok := remote.([]interface{})
+	if !ok {
+		diags.AddError("Invalid stream keys", "Console did not return a key list for a managed stream key attribute")
+		return previous, diags
+	}
+	keys := make([]streamKeyModel, 0, len(remoteKeys))
+	for _, value := range remoteKeys {
+		key, ok := value.(map[string]interface{})
+		id, validID := key["id"].(string)
+		if !ok || !validID || id == "" {
+			diags.AddError("Invalid stream key", "Console returned a key without an ID")
+			return previous, diags
+		}
+		plaintext := types.StringNull()
+		if known, exists := plaintextByID[id]; exists {
+			plaintext = known
+		}
+		keys = append(keys, streamKeyModel{ID: types.StringValue(id), Plaintext: plaintext})
+	}
+	result, d := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: streamKeyAttrTypes}, keys)
+	diags.Append(d...)
+	return result, diags
 }
