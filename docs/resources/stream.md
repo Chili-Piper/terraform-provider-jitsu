@@ -51,4 +51,4 @@ Import using `workspace_id/stream_id`:
 terraform import jitsu_stream.example <workspace_id>/<stream_id>
 ```
 
-~> **Note:** Keys are not available on import because the API returns hashed values. You will need to set them in your configuration after import.
+~> **Note:** Key plaintext is not available on import. Omitted key lists preserve the existing keys. Set `public_keys = []` or `private_keys = []` to revoke all keys of that kind. Removing a previously configured key list also revokes those keys.

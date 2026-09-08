@@ -87,12 +87,12 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"public_keys": schema.ListNestedAttribute{
 				Optional:     true,
-				Description:  "Public (browser) write keys.",
+				Description:  "Public (browser) write keys. Omit after import to preserve existing keys; set an empty list to revoke all public keys.",
 				NestedObject: keySchema,
 			},
 			"private_keys": schema.ListNestedAttribute{
 				Optional:     true,
-				Description:  "Private (server-to-server) write keys.",
+				Description:  "Private (server-to-server) write keys. Omit after import to preserve existing keys; set an empty list to revoke all private keys.",
 				NestedObject: keySchema,
 			},
 		},
@@ -104,8 +104,11 @@ func (r *streamResource) Configure(_ context.Context, req resource.ConfigureRequ
 }
 
 func keysToPayload(ctx context.Context, keys types.List) ([]map[string]string, error) {
-	if keys.IsNull() || keys.IsUnknown() || len(keys.Elements()) == 0 {
-		return []map[string]string{}, nil
+	if keys.IsUnknown() {
+		return nil, fmt.Errorf("keys must be known before applying")
+	}
+	if keys.IsNull() {
+		return nil, nil
 	}
 	var models []streamKeyModel
 	if diags := keys.ElementsAs(ctx, &models, false); diags.HasError() {
@@ -244,8 +247,9 @@ func (r *streamResource) Read(ctx context.Context, req resource.ReadRequest, res
 }
 
 func (r *streamResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan streamModel
+	var plan, state streamModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -262,6 +266,9 @@ func (r *streamResource) Update(ctx context.Context, req resource.UpdateRequest,
 		resp.Diagnostics.AddError("Error building public keys", err.Error())
 		return
 	}
+	if plan.PublicKeys.IsNull() && !state.PublicKeys.IsNull() {
+		pubKeys = []map[string]string{}
+	}
 	if pubKeys != nil {
 		payload["publicKeys"] = pubKeys
 	}
@@ -270,6 +277,9 @@ func (r *streamResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if err != nil {
 		resp.Diagnostics.AddError("Error building private keys", err.Error())
 		return
+	}
+	if plan.PrivateKeys.IsNull() && !state.PrivateKeys.IsNull() {
+		privKeys = []map[string]string{}
 	}
 	if privKeys != nil {
 		payload["privateKeys"] = privKeys
