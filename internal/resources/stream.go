@@ -205,6 +205,7 @@ func (r *streamResource) Create(ctx context.Context, req resource.CreateRequest,
 		if err != nil {
 			rollbackErr := r.client.Delete(ctx, plan.WorkspaceID.ValueString(), "stream", plan.ID.ValueString())
 			if rollbackErr != nil {
+				resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 				resp.Diagnostics.AddError(
 					"Error setting stream keys",
 					fmt.Sprintf("%s. Rollback failed for stream %q: %s", err.Error(), plan.ID.ValueString(), rollbackErr.Error()),
