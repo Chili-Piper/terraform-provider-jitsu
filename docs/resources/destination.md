@@ -16,11 +16,13 @@ resource "jitsu_destination" "clickhouse" {
   id               = "dest-clickhouse"
   name             = "ClickHouse"
   destination_type = "clickhouse"
-  protocol         = "https"
-  hosts            = ["clickhouse.example.com:8443"]
-  username         = "default"
-  password         = "changeme"
-  database         = "analytics"
+  clickhouse = {
+    protocol = "https"
+    hosts    = ["clickhouse.example.com:8443"]
+    username = "default"
+    password = "changeme"
+    database = "analytics"
+  }
 }
 ```
 
@@ -32,14 +34,15 @@ resource "jitsu_destination" "clickhouse" {
 - `id` (String) - Destination ID. Changing this forces a new resource.
 - `name` (String) - Display name of the destination.
 - `destination_type` (String) - Destination type (e.g., `clickhouse`, `postgres`).
-- `hosts` (List of String) - List of host:port addresses.
+- `clickhouse.hosts` (List of String) - List of host:port addresses, required inside the `clickhouse` object.
 
 ### Optional
 
-- `protocol` (String) - Connection protocol (e.g., `http`, `https`, `tcp`).
-- `username` (String) - Database username.
-- `password` (String, Sensitive) - Database password. API returns masked value; stored in state from user config.
-- `database` (String) - Database name.
+- `clickhouse.protocol` (String) - Connection protocol. Defaults to `clickhouse-secure`.
+- `clickhouse.username` (String) - Database username. Defaults to `default`.
+- `clickhouse.password` (String, Sensitive) - Database password. API returns masked value; stored in state from user config.
+- `clickhouse.database` (String) - Database name. Defaults to `default`.
+- `clickhouse.cluster` (String) - ClickHouse cluster name. Defaults to an empty string (no cluster).
 
 ## Import
 
@@ -50,3 +53,5 @@ terraform import jitsu_destination.example <workspace_id>/<destination_id>
 ```
 
 ~> **Note:** The password is not available on import because the API returns a masked value.
+
+Removing `clickhouse.protocol`, `clickhouse.username`, or `clickhouse.database` restores the Console defaults (`clickhouse-secure`, `default`, and `default`). Removing a configured `clickhouse.cluster` clears the cluster; removing a configured `clickhouse.password` resets it to an empty password. An omitted password after import remains unmanaged and is preserved.
