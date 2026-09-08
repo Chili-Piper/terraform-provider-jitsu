@@ -67,34 +67,55 @@ func (c *Client) getDB() (*sql.DB, error) {
 
 // hardDeleteSoftDeleted removes a soft-deleted row from the DB so it can be re-created via POST.
 // For ConfigurationObject, it also cascades to soft-deleted links referencing it.
-func (c *Client) hardDeleteSoftDeleted(ctx context.Context, id, table string) error {
+func (c *Client) hardDeleteSoftDeleted(ctx context.Context, workspaceID, id, table, objectType string) error {
 	db, err := c.getDB()
 	if err != nil {
 		return fmt.Errorf("cannot purge soft-deleted %q: %w", id, err)
 	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting soft-delete cleanup: %w", err)
+	}
+	defer tx.Rollback()
 
-	tflog.Warn(ctx, "hard-deleting soft-deleted row for re-creation", map[string]interface{}{
-		"id":    id,
-		"table": table,
-	})
+	predicate := `id = $1 AND "workspaceId" = $2 AND type = $3 AND deleted = true`
+	query := fmt.Sprintf(`SELECT id FROM newjitsu.%s WHERE %s FOR UPDATE`, pq.QuoteIdentifier(table), predicate)
+	var matchedID string
+	if err := tx.QueryRowContext(ctx, query, id, workspaceID, objectType).Scan(&matchedID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("no soft-deleted %s %q in workspace %q matches this resource", objectType, id, workspaceID)
+		}
+		return fmt.Errorf("checking soft-delete cleanup ownership: %w", err)
+	}
 
-	// For config objects, first delete any soft-deleted links that reference this object (FK constraint)
 	if table == "ConfigurationObject" {
-		_, err = db.ExecContext(ctx,
-			`DELETE FROM newjitsu."ConfigurationObjectLink" WHERE deleted = true AND ("fromId" = $1 OR "toId" = $1)`,
-			id,
+		_, err = tx.ExecContext(ctx,
+			`DELETE FROM newjitsu."ConfigurationObjectLink" WHERE "workspaceId" = $2 AND deleted = true AND ("fromId" = $1 OR "toId" = $1)`,
+			id, workspaceID,
 		)
 		if err != nil {
 			return fmt.Errorf("hard-deleting referencing links for %q: %w", id, err)
 		}
 	}
 
-	query := fmt.Sprintf(`DELETE FROM newjitsu.%s WHERE id = $1 AND deleted = true`,
-		pq.QuoteIdentifier(table))
-	_, err = db.ExecContext(ctx, query, id)
+	query = fmt.Sprintf(`DELETE FROM newjitsu.%s WHERE %s`, pq.QuoteIdentifier(table), predicate)
+	result, err := tx.ExecContext(ctx, query, id, workspaceID, objectType)
 	if err != nil {
 		return fmt.Errorf("hard-deleting soft-deleted %s %q: %w", table, id, err)
 	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking soft-delete cleanup result: %w", err)
+	}
+	if count != 1 {
+		return fmt.Errorf("expected to purge one soft-deleted row for %q, got %d", id, count)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing soft-delete cleanup: %w", err)
+	}
+	tflog.Warn(ctx, "hard-deleted soft-deleted row for re-creation", map[string]interface{}{
+		"id": id, "workspace_id": workspaceID, "type": objectType,
+	})
 	return nil
 }
 
@@ -184,10 +205,15 @@ func (c *Client) Create(ctx context.Context, workspaceID, resourceType string, p
 			return nil, fmt.Errorf("POST %s returned soft-delete conflict but payload has no 'id' field", endpoint)
 		}
 		table := "ConfigurationObject"
+		objectType := resourceType
 		if resourceType == "link" {
 			table = "ConfigurationObjectLink"
+			objectType, _ = payload["type"].(string)
+			if objectType == "" {
+				objectType = "push"
+			}
 		}
-		if err := c.hardDeleteSoftDeleted(ctx, id, table); err != nil {
+		if err := c.hardDeleteSoftDeleted(ctx, workspaceID, id, table, objectType); err != nil {
 			return nil, fmt.Errorf("POST failed (soft-delete conflict) and cleanup failed: %w", err)
 		}
 		// Retry
