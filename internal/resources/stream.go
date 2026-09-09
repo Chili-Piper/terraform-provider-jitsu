@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
@@ -60,7 +61,8 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"plaintext": schema.StringAttribute{
 				Required:    true,
 				Sensitive:   true,
-				Description: "Plaintext key value. Write-only — API returns hashed value on read.",
+				Description: "Plaintext key value. Must not be empty. Write-only — API returns hashed value on read.",
+				Validators:  []validator.String{nonEmptyStreamKey{}},
 			},
 		},
 	}
@@ -118,6 +120,9 @@ func keysToPayload(ctx context.Context, keys types.List) ([]map[string]string, e
 	result := make([]map[string]string, len(models))
 	for i, m := range models {
 		plaintext := m.Plaintext.ValueString()
+		if plaintext == "" {
+			return nil, fmt.Errorf("key plaintext must not be empty; remove the key from the list to revoke it")
+		}
 		result[i] = map[string]string{
 			"id":        m.ID.ValueString(),
 			"plaintext": plaintext,
@@ -395,4 +400,20 @@ func refreshStreamKeys(ctx context.Context, previous types.List, remote interfac
 	result, d := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: streamKeyAttrTypes}, keys)
 	diags.Append(d...)
 	return result, diags
+}
+
+type nonEmptyStreamKey struct{}
+
+func (nonEmptyStreamKey) Description(context.Context) string {
+	return "Key plaintext must not be empty; remove the key from the list to revoke it."
+}
+
+func (v nonEmptyStreamKey) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (nonEmptyStreamKey) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if !req.ConfigValue.IsNull() && !req.ConfigValue.IsUnknown() && req.ConfigValue.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid stream key", "Key plaintext must not be empty; remove the key from the list to revoke it.")
+	}
 }

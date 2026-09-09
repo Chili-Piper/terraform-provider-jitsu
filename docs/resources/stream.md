@@ -42,7 +42,7 @@ resource "jitsu_stream" "website" {
 
 - `public_keys` (List of Object) - Public (browser) write keys. Each object has:
   - `id` (String, Required) - Key identifier.
-  - `plaintext` (String, Required, Sensitive) - Plaintext key value. Write-only; API returns hashed value on read.
+  - `plaintext` (String, Required, Sensitive) - Non-empty plaintext key value. To revoke a key, remove its entry; use `[]` to revoke all keys in that list. Write-only; API returns hashed value on read.
 - `private_keys` (List of Object) - Private (server-to-server) write keys. Same schema as `public_keys`.
 
 ## Import
