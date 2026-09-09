@@ -294,6 +294,19 @@ func (r *streamResource) Update(ctx context.Context, req resource.UpdateRequest,
 		payload["privateKeys"] = privKeys
 	}
 
+	remote, err := r.client.Read(ctx, plan.WorkspaceID.ValueString(), "stream", plan.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading stream before update", err.Error())
+		return
+	}
+	if remote == nil {
+		resp.Diagnostics.AddError("Stream not found", "The stream no longer exists; refresh the plan before applying")
+		return
+	}
+	if domains, ok := remote["authorizedJavaScriptDomains"]; ok {
+		payload["authorizedJavaScriptDomains"] = domains
+	}
+
 	_, err = r.client.Update(ctx, plan.WorkspaceID.ValueString(), "stream", plan.ID.ValueString(), payload)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating stream", err.Error())

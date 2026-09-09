@@ -8,6 +8,8 @@ description: |-
 
 Manages a Jitsu stream (event source). Keys are set via a two-step create (POST) then update (PUT).
 
+Existing browser-origin restrictions configured in Console are preserved when Terraform updates the stream.
+
 ## Example Usage
 
 ```hcl
