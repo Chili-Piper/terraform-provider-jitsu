@@ -50,7 +50,7 @@ resource "jitsu_link" "stream_to_clickhouse" {
 - `schema_freeze` (Boolean) - Freeze schema (prevent new columns). Changing this forces a new resource.
 - `timestamp_column` (String) - Timestamp column name. Changing this forces a new resource.
 - `keep_original_names` (Boolean) - Keep original event property names (no snake_case conversion). Changing this forces a new resource.
-- `functions` (List of String) - List of function IDs to apply. Provider adds `udf.` prefix automatically. Changing this forces a new resource.
+- `functions` (List of String) - List of function IDs to apply. Use bare IDs for workspace functions (the provider adds `udf.`) or fully qualified `builtin.*` IDs for built-in functions.
 
 ### Read-Only
 

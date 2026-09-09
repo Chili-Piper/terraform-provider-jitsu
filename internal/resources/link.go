@@ -127,7 +127,7 @@ func (r *linkResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"functions": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "List of function IDs to apply. Provider adds udf. prefix automatically.",
+				Description: "List of function IDs to apply. Use bare IDs for workspace functions or builtin.* IDs for built-in functions.",
 			},
 		},
 	}
@@ -179,7 +179,11 @@ func (r *linkResource) buildPayload(ctx context.Context, plan *linkModel) (map[s
 		}
 		funcs := make([]map[string]string, len(funcIDs))
 		for i, fid := range funcIDs {
-			funcs[i] = map[string]string{"functionId": "udf." + fid}
+			functionID := fid
+			if !strings.HasPrefix(fid, "builtin.") {
+				functionID = "udf." + fid
+			}
+			funcs[i] = map[string]string{"functionId": functionID}
 		}
 		data["functions"] = funcs
 	}
