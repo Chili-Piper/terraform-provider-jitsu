@@ -90,13 +90,15 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"public_keys": schema.ListNestedAttribute{
 				Optional:     true,
-				Description:  "Public (browser) write keys. Omit after import to preserve existing keys; set an empty list to revoke all public keys.",
+				Description:  "Public (browser) write keys with unique IDs. Omit after import to preserve existing keys; set an empty list to revoke all public keys.",
 				NestedObject: keySchema,
+				Validators:   []validator.List{uniqueStreamKeyIDs{}},
 			},
 			"private_keys": schema.ListNestedAttribute{
 				Optional:     true,
-				Description:  "Private (server-to-server) write keys. Omit after import to preserve existing keys; set an empty list to revoke all private keys.",
+				Description:  "Private (server-to-server) write keys with unique IDs. Omit after import to preserve existing keys; set an empty list to revoke all private keys.",
 				NestedObject: keySchema,
+				Validators:   []validator.List{uniqueStreamKeyIDs{}},
 			},
 		},
 	}
@@ -112,6 +114,9 @@ func keysToPayload(ctx context.Context, keys types.List) ([]map[string]string, e
 	}
 	if keys.IsNull() {
 		return nil, nil
+	}
+	if err := validateUniqueStreamKeyIDs(keys); err != nil {
+		return nil, err
 	}
 	var models []streamKeyModel
 	if diags := keys.ElementsAs(ctx, &models, false); diags.HasError() {
