@@ -52,7 +52,7 @@ func (p *jitsuProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 			},
 			"database_url": schema.StringAttribute{
 				Description: "PostgreSQL connection string for Console's database. Required to handle destroy+recreate " +
-					"(Jitsu uses soft-delete; this allows the provider to hard-delete stale rows). " +
+					"by purging stale configuration rows or releasing a deleted workspace's slug. " +
 					"Can also be set via JITSU_DATABASE_URL env var.",
 				Optional:  true,
 				Sensitive: true,

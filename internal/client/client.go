@@ -52,7 +52,7 @@ func (c *Client) Close() {
 func (c *Client) getDB() (*sql.DB, error) {
 	if c.databaseURL == "" {
 		return nil, fmt.Errorf("database_url not configured in provider; " +
-			"Jitsu uses soft-delete, so re-creating objects with the same ID requires database_url to hard-delete stale rows")
+			"Jitsu uses soft-delete, so re-creating objects with the same ID or workspace slug requires database_url for cleanup")
 	}
 	c.dbOnce.Do(func() {
 		c.db, c.dbErr = sql.Open("postgres", c.databaseURL)
@@ -355,6 +355,20 @@ func (c *Client) WorkspaceCreate(ctx context.Context, name, slug string) (string
 	if err != nil {
 		return "", err
 	}
+	if (status == 400 || status == 500) &&
+		((strings.Contains(string(body), "Invalid workspace slug:") && strings.Contains(string(body), "already taken")) ||
+			(strings.Contains(string(body), "Unique constraint failed") && strings.Contains(string(body), "slug"))) {
+		released, err := c.releaseDeletedWorkspaceSlug(ctx, slug)
+		if err != nil {
+			return "", fmt.Errorf("recovering soft-deleted workspace slug: %w", err)
+		}
+		if released {
+			body, status, err = c.doRequest(ctx, http.MethodPost, endpoint, payload)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
 	if status < 200 || status >= 300 {
 		if status == 500 && strings.Contains(string(body), "WorkspaceAccess_userId_fkey") {
 			return "", fmt.Errorf(
@@ -377,6 +391,17 @@ func (c *Client) WorkspaceCreate(ctx context.Context, name, slug string) (string
 
 // WorkspaceRead fetches a workspace by ID or slug. Returns nil if not found or deleted.
 func (c *Client) WorkspaceRead(ctx context.Context, idOrSlug string) (map[string]interface{}, error) {
+	result, err := c.readWorkspace(ctx, idOrSlug)
+	if err != nil {
+		return nil, err
+	}
+	if deleted, ok := result["deleted"].(bool); ok && deleted {
+		return nil, nil
+	}
+	return result, nil
+}
+
+func (c *Client) readWorkspace(ctx context.Context, idOrSlug string) (map[string]interface{}, error) {
 	endpoint := c.workspaceItemURL(idOrSlug)
 	body, status, err := c.doRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -393,10 +418,69 @@ func (c *Client) WorkspaceRead(ctx context.Context, idOrSlug string) (map[string
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("unmarshaling response: %w", err)
 	}
-	if deleted, ok := result["deleted"].(bool); ok && deleted {
-		return nil, nil
-	}
 	return result, nil
+}
+
+func (c *Client) releaseDeletedWorkspaceSlug(ctx context.Context, slug string) (bool, error) {
+	workspace, err := c.readWorkspace(ctx, slug)
+	if err != nil {
+		return false, err
+	}
+	if deleted, _ := workspace["deleted"].(bool); !deleted {
+		return false, nil
+	}
+	id, _ := workspace["id"].(string)
+	if id == "" || workspace["slug"] != slug {
+		return false, fmt.Errorf("deleted workspace response does not match slug %q", slug)
+	}
+	endpoint := c.consoleURL + "/api/me"
+	body, status, err := c.doRequest(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, err
+	}
+	if status < 200 || status >= 300 {
+		return false, apiResponseError("GET", endpoint, status)
+	}
+	var identity struct {
+		Auth bool `json:"auth"`
+		User struct {
+			InternalID    string `json:"internalId"`
+			LoginProvider string `json:"loginProvider"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &identity); err != nil {
+		return false, fmt.Errorf("unmarshaling authenticated identity: %w", err)
+	}
+	if !identity.Auth || identity.User.InternalID == "" {
+		return false, fmt.Errorf("workspace slug recovery requires an authenticated identity")
+	}
+	serviceAdmin := identity.User.InternalID == "admin-service-account@jitsu.com" && identity.User.LoginProvider == "admin/token"
+	db, err := c.getDB()
+	if err != nil {
+		return false, err
+	}
+	result, err := db.ExecContext(ctx,
+		`UPDATE newjitsu."Workspace" SET slug = NULL, "updatedAt" = CURRENT_TIMESTAMP
+WHERE id = $1 AND slug = $2 AND deleted = true AND (
+  $4 OR (
+    EXISTS (SELECT 1 FROM newjitsu."UserProfile" WHERE id = $3 AND admin = true)
+    AND NOT EXISTS (SELECT 1 FROM newjitsu."WorkspaceAccess" WHERE "workspaceId" = $1 AND "userId" = $3)
+  )
+  OR EXISTS (SELECT 1 FROM newjitsu."WorkspaceAccess" WHERE "workspaceId" = $1 AND "userId" = $3 AND COALESCE(role::text, 'owner') = 'owner')
+)`,
+		id, slug, identity.User.InternalID, serviceAdmin,
+	)
+	if err != nil {
+		return false, fmt.Errorf("releasing deleted workspace slug: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking workspace slug cleanup: %w", err)
+	}
+	if count != 1 {
+		return false, fmt.Errorf("deleted workspace %q changed or authenticated user is not its owner or an administrator", id)
+	}
+	return true, nil
 }
 
 // WorkspaceUpdate updates a workspace name/slug by ID or slug.
