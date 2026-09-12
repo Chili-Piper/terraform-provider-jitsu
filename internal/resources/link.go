@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -90,7 +91,8 @@ func (r *linkResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"data_layout": schema.StringAttribute{
 				Optional:    true,
-				Description: "Data layout (e.g., segment-single-table).",
+				Description: "Data layout: segment, segment-single-table, jitsu-legacy, or passthrough.",
+				Validators:  []validator.String{linkDataLayoutValidator{}},
 			},
 			"primary_key": schema.StringAttribute{
 				Optional:    true,
@@ -138,6 +140,9 @@ func (r *linkResource) Configure(_ context.Context, req resource.ConfigureReques
 }
 
 func (r *linkResource) buildPayload(ctx context.Context, plan *linkModel) (map[string]interface{}, error) {
+	if err := validateLinkDataLayout(plan.DataLayout); err != nil {
+		return nil, err
+	}
 	data := map[string]interface{}{}
 
 	if !plan.Mode.IsNull() && !plan.Mode.IsUnknown() {
@@ -522,4 +527,32 @@ func preserveFunctionSettings(planned []map[string]string, remote interface{}) [
 		}
 	}
 	return functions
+}
+
+func validateLinkDataLayout(value types.String) error {
+	if value.IsNull() || value.IsUnknown() {
+		return nil
+	}
+	switch value.ValueString() {
+	case "segment", "segment-single-table", "jitsu-legacy", "passthrough":
+		return nil
+	default:
+		return fmt.Errorf("data_layout must be segment, segment-single-table, jitsu-legacy, or passthrough; got %q", value.ValueString())
+	}
+}
+
+type linkDataLayoutValidator struct{}
+
+func (linkDataLayoutValidator) Description(context.Context) string {
+	return "Data layout must be segment, segment-single-table, jitsu-legacy, or passthrough."
+}
+
+func (v linkDataLayoutValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (linkDataLayoutValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if err := validateLinkDataLayout(req.ConfigValue); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid data layout", err.Error())
+	}
 }
