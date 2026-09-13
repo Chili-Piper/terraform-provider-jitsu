@@ -56,7 +56,8 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Required:    true,
-				Description: "Key identifier.",
+				Description: "Nonempty key identifier.",
+				Validators:  []validator.String{nonEmptyStreamKeyID{}},
 			},
 			"plaintext": schema.StringAttribute{
 				Required:    true,
@@ -90,13 +91,15 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"public_keys": schema.ListNestedAttribute{
 				Optional:     true,
-				Description:  "Public (browser) write keys. Omit after import to preserve existing keys; set an empty list to revoke all public keys.",
+				Description:  "Public (browser) write keys with unique IDs. Omit after import to preserve existing keys; set an empty list to revoke all public keys.",
 				NestedObject: keySchema,
+				Validators:   []validator.List{uniqueStreamKeyIDs{}},
 			},
 			"private_keys": schema.ListNestedAttribute{
 				Optional:     true,
-				Description:  "Private (server-to-server) write keys. Omit after import to preserve existing keys; set an empty list to revoke all private keys.",
+				Description:  "Private (server-to-server) write keys with unique IDs. Omit after import to preserve existing keys; set an empty list to revoke all private keys.",
 				NestedObject: keySchema,
+				Validators:   []validator.List{uniqueStreamKeyIDs{}},
 			},
 		},
 	}
@@ -113,12 +116,21 @@ func keysToPayload(ctx context.Context, keys types.List) ([]map[string]string, e
 	if keys.IsNull() {
 		return nil, nil
 	}
+	if err := validateUniqueStreamKeyIDs(keys); err != nil {
+		return nil, err
+	}
 	var models []streamKeyModel
 	if diags := keys.ElementsAs(ctx, &models, false); diags.HasError() {
 		return nil, fmt.Errorf("reading keys: %v", diags.Errors())
 	}
 	result := make([]map[string]string, len(models))
 	for i, m := range models {
+		if m.ID.IsUnknown() {
+			return nil, fmt.Errorf("key IDs must be known before applying")
+		}
+		if m.ID.ValueString() == "" {
+			return nil, fmt.Errorf("key IDs must not be empty")
+		}
 		plaintext := m.Plaintext.ValueString()
 		if plaintext == "" {
 			return nil, fmt.Errorf("key plaintext must not be empty; remove the key from the list to revoke it")
@@ -387,7 +399,7 @@ func refreshStreamKeys(ctx context.Context, previous types.List, remote interfac
 	for _, value := range remoteKeys {
 		key, ok := value.(map[string]interface{})
 		id, validID := key["id"].(string)
-		if !ok || !validID || id == "" {
+		if !ok || !validID {
 			diags.AddError("Invalid stream key", "Console returned a key without an ID")
 			return previous, diags
 		}
@@ -415,5 +427,21 @@ func (v nonEmptyStreamKey) MarkdownDescription(ctx context.Context) string {
 func (nonEmptyStreamKey) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
 	if !req.ConfigValue.IsNull() && !req.ConfigValue.IsUnknown() && req.ConfigValue.ValueString() == "" {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid stream key", "Key plaintext must not be empty; remove the key from the list to revoke it.")
+	}
+}
+
+type nonEmptyStreamKeyID struct{}
+
+func (nonEmptyStreamKeyID) Description(context.Context) string {
+	return "Key IDs must not be empty."
+}
+
+func (v nonEmptyStreamKeyID) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (nonEmptyStreamKeyID) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if !req.ConfigValue.IsNull() && !req.ConfigValue.IsUnknown() && req.ConfigValue.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid stream key ID", "key IDs must not be empty")
 	}
 }

@@ -41,7 +41,7 @@ resource "jitsu_link" "stream_to_clickhouse" {
 ### Optional
 
 - `mode` (String) - Delivery mode (e.g., `batch`, `stream`). Changing this forces a new resource.
-- `data_layout` (String) - Data layout (e.g., `segment-single-table`). Changing this forces a new resource.
+- `data_layout` (String) - Data layout: `segment`, `segment-single-table`, `jitsu-legacy`, or `passthrough`.
 - `primary_key` (String) - Comma-separated primary key columns. Changing this forces a new resource.
 - `frequency` (Number) - Batch frequency in minutes. Changing this forces a new resource.
 - `batch_size` (Number) - Maximum batch size. Changing this forces a new resource.

@@ -8,6 +8,8 @@ description: |-
 
 Manages a Jitsu workspace.
 
+Reusing a deleted workspace's slug requires `database_url` and an authenticated owner of that workspace or an administrator. The provider releases the old slug and creates a new workspace; the deleted workspace and its data remain preserved.
+
 ## Example Usage
 
 ```hcl

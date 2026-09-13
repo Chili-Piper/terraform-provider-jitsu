@@ -483,10 +483,8 @@ func (r *destinationResource) Update(ctx context.Context, req resource.UpdateReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if oldCH != nil && newCH != nil {
-		if !oldCH.Password.IsNull() && newCH.Password.IsNull() {
-			payload["password"] = ""
-		}
+	if newCH != nil && newCH.Password.IsNull() && (oldCH == nil || !oldCH.Password.IsNull()) {
+		payload["password"] = ""
 	}
 
 	_, err = r.client.Update(ctx, plan.WorkspaceID.ValueString(), "destination", plan.ID.ValueString(), payload)
