@@ -17,6 +17,15 @@ func mustClickhouseObject(t *testing.T, ctx context.Context, ch *clickhouseModel
 	return obj
 }
 
+func mustPostgresObject(t *testing.T, ctx context.Context, pg *postgresModel) types.Object {
+	t.Helper()
+	obj, diags := types.ObjectValueFrom(ctx, postgresAttrTypes, pg)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics building postgres object: %v", diags)
+	}
+	return obj
+}
+
 func mustBigqueryObject(t *testing.T, ctx context.Context, bq *bigqueryModel) types.Object {
 	t.Helper()
 	obj, diags := types.ObjectValueFrom(ctx, bigqueryAttrTypes, bq)
@@ -140,9 +149,9 @@ func TestDestinationReadAPIIntoState_BigQuery(t *testing.T) {
 	result := map[string]interface{}{
 		"name":            "BQ Destination",
 		"destinationType": "bigquery",
-		"project":   "my-project",
-		"bqDataset": "my_dataset",
-		"keyFile":   "__MASKED_BY_JITSU__",
+		"project":         "my-project",
+		"bqDataset":       "my_dataset",
+		"keyFile":         "__MASKED_BY_JITSU__",
 	}
 
 	diags := (&destinationResource{}).readAPIIntoState(ctx, result, &state)
@@ -254,5 +263,119 @@ func TestDestinationBuildPayload_BigQuery(t *testing.T) {
 	}
 	if _, ok := payload["hosts"]; ok {
 		t.Fatal("hosts should not be set for bigquery destination")
+	}
+}
+
+func TestDestinationBuildPayload_Postgres(t *testing.T) {
+	ctx := context.Background()
+
+	plan := destinationModel{
+		WorkspaceID:     types.StringValue("workspace-id"),
+		ID:              types.StringValue("destination-id"),
+		Name:            types.StringValue("Postgres"),
+		DestinationType: types.StringValue("postgres"),
+		ClickHouse:      types.ObjectNull(clickhouseAttrTypes),
+		BigQuery:        types.ObjectNull(bigqueryAttrTypes),
+		Postgres: mustPostgresObject(t, ctx, &postgresModel{
+			Host:          types.StringValue("10.0.0.1"),
+			Port:          types.Int64Value(5432),
+			Database:      types.StringValue("events"),
+			Username:      types.StringValue("events"),
+			Password:      types.StringValue("secret"),
+			DefaultSchema: types.StringValue("public"),
+			SSLMode:       types.StringValue("require"),
+		}),
+	}
+
+	payload, err := (&destinationResource{}).buildPayload(ctx, &plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := map[string]interface{}{
+		"host":          "10.0.0.1",
+		"port":          int64(5432),
+		"database":      "events",
+		"username":      "events",
+		"password":      "secret",
+		"defaultSchema": "public",
+		"sslMode":       "require",
+	}
+	for key, value := range want {
+		if payload[key] != value {
+			t.Fatalf("%s mismatch: got %v, want %v", key, payload[key], value)
+		}
+	}
+	if _, ok := payload["hosts"]; ok {
+		t.Fatal("hosts should not be set for postgres destination")
+	}
+}
+
+func TestDestinationBuildPayload_PostgresRejectsClickhouseBlock(t *testing.T) {
+	ctx := context.Background()
+
+	hosts, diags := types.ListValueFrom(ctx, types.StringType, []string{"clickhouse:8123"})
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics building hosts: %v", diags)
+	}
+
+	plan := destinationModel{
+		DestinationType: types.StringValue("postgres"),
+		ClickHouse:      mustClickhouseObject(t, ctx, &clickhouseModel{Hosts: hosts}),
+		BigQuery:        types.ObjectNull(bigqueryAttrTypes),
+		Postgres:        types.ObjectNull(postgresAttrTypes),
+	}
+
+	if _, err := (&destinationResource{}).buildPayload(ctx, &plan); err == nil {
+		t.Fatal("expected an error for a postgres destination with a clickhouse block")
+	}
+}
+
+func TestDestinationReadAPIIntoState_Postgres(t *testing.T) {
+	ctx := context.Background()
+
+	state := destinationModel{
+		ClickHouse: types.ObjectNull(clickhouseAttrTypes),
+		BigQuery:   types.ObjectNull(bigqueryAttrTypes),
+		Postgres: mustPostgresObject(t, ctx, &postgresModel{
+			Host:          types.StringValue("old"),
+			Port:          types.Int64Value(5432),
+			Database:      types.StringValue("events"),
+			Username:      types.StringValue("events"),
+			Password:      types.StringValue("secret"),
+			DefaultSchema: types.StringValue("public"),
+			SSLMode:       types.StringValue("require"),
+		}),
+	}
+
+	result := map[string]interface{}{
+		"name":            "Postgres Destination",
+		"destinationType": "postgres",
+		"host":            "10.0.0.2",
+		"port":            float64(6432),
+		"database":        "events",
+		"username":        "events",
+		"password":        "__MASKED_BY_JITSU__",
+		"defaultSchema":   "public",
+		"sslMode":         "disable",
+	}
+
+	diags := (&destinationResource{}).readAPIIntoState(ctx, result, &state)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+
+	pg, d := state.postgres(ctx)
+	if d.HasError() || pg == nil {
+		t.Fatalf("postgres should be set: %v", d)
+	}
+	if pg.Host.ValueString() != "10.0.0.2" || pg.Port.ValueInt64() != 6432 || pg.SSLMode.ValueString() != "disable" {
+		t.Fatalf("postgres fields not read from the console: %+v", pg)
+	}
+	if pg.Password.ValueString() != "secret" {
+		t.Fatalf("password should be preserved from state, got %q", pg.Password.ValueString())
+	}
+	if !state.ClickHouse.IsNull() || !state.BigQuery.IsNull() {
+		t.Fatal("clickhouse and bigquery should be null for a postgres destination")
 	}
 }

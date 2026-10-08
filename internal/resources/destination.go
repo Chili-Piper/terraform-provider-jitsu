@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -37,6 +38,16 @@ type clickhouseModel struct {
 	Cluster  types.String `tfsdk:"cluster"`
 }
 
+type postgresModel struct {
+	Host          types.String `tfsdk:"host"`
+	Port          types.Int64  `tfsdk:"port"`
+	Database      types.String `tfsdk:"database"`
+	Username      types.String `tfsdk:"username"`
+	Password      types.String `tfsdk:"password"`
+	DefaultSchema types.String `tfsdk:"default_schema"`
+	SSLMode       types.String `tfsdk:"ssl_mode"`
+}
+
 type bigqueryModel struct {
 	Credentials types.String `tfsdk:"credentials"`
 	ProjectID   types.String `tfsdk:"project_id"`
@@ -51,6 +62,16 @@ var clickhouseAttrTypes = map[string]attr.Type{
 	"password": types.StringType,
 	"database": types.StringType,
 	"cluster":  types.StringType,
+}
+
+var postgresAttrTypes = map[string]attr.Type{
+	"host":           types.StringType,
+	"port":           types.Int64Type,
+	"database":       types.StringType,
+	"username":       types.StringType,
+	"password":       types.StringType,
+	"default_schema": types.StringType,
+	"ssl_mode":       types.StringType,
 }
 
 var bigqueryAttrTypes = map[string]attr.Type{
@@ -70,6 +91,7 @@ type destinationModel struct {
 	DestinationType types.String `tfsdk:"destination_type"`
 	ClickHouse      types.Object `tfsdk:"clickhouse"`
 	BigQuery        types.Object `tfsdk:"bigquery"`
+	Postgres        types.Object `tfsdk:"postgres"`
 }
 
 func (m *destinationModel) clickhouse(ctx context.Context) (*clickhouseModel, diag.Diagnostics) {
@@ -79,6 +101,34 @@ func (m *destinationModel) clickhouse(ctx context.Context) (*clickhouseModel, di
 	var ch clickhouseModel
 	diags := m.ClickHouse.As(ctx, &ch, basetypes.ObjectAsOptions{})
 	return &ch, diags
+}
+
+func (m *destinationModel) postgres(ctx context.Context) (*postgresModel, diag.Diagnostics) {
+	if m.Postgres.IsNull() || m.Postgres.IsUnknown() {
+		return nil, nil
+	}
+	var pg postgresModel
+	diags := m.Postgres.As(ctx, &pg, basetypes.ObjectAsOptions{})
+	return &pg, diags
+}
+
+// blockFor names the config block a destination type needs: bigquery and postgres have their own,
+// every other type uses the clickhouse block.
+func blockFor(destinationType string) string {
+	switch destinationType {
+	case "bigquery", "postgres":
+		return destinationType
+	default:
+		return "clickhouse"
+	}
+}
+
+// typeLabel is how validation messages name a destination type.
+func typeLabel(destinationType string) string {
+	if destinationType == "bigquery" {
+		return "BigQuery"
+	}
+	return fmt.Sprintf("%q", destinationType)
 }
 
 func (m *destinationModel) bigquery(ctx context.Context) (*bigqueryModel, diag.Diagnostics) {
@@ -100,7 +150,7 @@ func (r *destinationResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Jitsu destination (e.g., ClickHouse, BigQuery).",
+		Description: "Manages a Jitsu destination (e.g., ClickHouse, BigQuery, Postgres).",
 		Attributes: map[string]schema.Attribute{
 			"workspace_id": schema.StringAttribute{
 				Required:    true,
@@ -122,7 +172,7 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"destination_type": schema.StringAttribute{
 				Required:    true,
-				Description: "Destination type (e.g., clickhouse, bigquery).",
+				Description: "Destination type (e.g., clickhouse, bigquery, postgres).",
 			},
 			"clickhouse": schema.SingleNestedAttribute{
 				Optional:    true,
@@ -164,6 +214,47 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 					},
 				},
 			},
+			"postgres": schema.SingleNestedAttribute{
+				Optional:    true,
+				Description: "Postgres destination configuration.",
+				Attributes: map[string]schema.Attribute{
+					"host": schema.StringAttribute{
+						Required:    true,
+						Description: "Host name or IP address.",
+					},
+					"port": schema.Int64Attribute{
+						Optional:    true,
+						Computed:    true,
+						Default:     int64default.StaticInt64(5432),
+						Description: "Port. Defaults to 5432.",
+					},
+					"database": schema.StringAttribute{
+						Required:    true,
+						Description: "Database name.",
+					},
+					"username": schema.StringAttribute{
+						Required:    true,
+						Description: "Database username.",
+					},
+					"password": schema.StringAttribute{
+						Optional:    true,
+						Sensitive:   true,
+						Description: "Database password. API returns masked value; stored in state from user config.",
+					},
+					"default_schema": schema.StringAttribute{
+						Optional:    true,
+						Computed:    true,
+						Default:     stringdefault.StaticString("public"),
+						Description: "Schema Bulker creates tables in. Defaults to public.",
+					},
+					"ssl_mode": schema.StringAttribute{
+						Optional:    true,
+						Computed:    true,
+						Default:     stringdefault.StaticString("require"),
+						Description: "SSL mode: disable, require, verify-ca or verify-full. Defaults to require.",
+					},
+				},
+			},
 			"bigquery": schema.SingleNestedAttribute{
 				Optional:    true,
 				Description: "BigQuery destination configuration.",
@@ -198,21 +289,27 @@ func (r *destinationResource) ValidateConfig(ctx context.Context, req resource.V
 		return
 	}
 
-	// For each nested block, determine whether it is definitively set,
-	// definitively absent (null), or unknown. We only skip individual
-	// checks that depend on an unknown value — everything else is still
-	// validated at plan time.
-	chSet := !config.ClickHouse.IsNull() && !config.ClickHouse.IsUnknown()
-	chNull := config.ClickHouse.IsNull()
-	bqSet := !config.BigQuery.IsNull() && !config.BigQuery.IsUnknown()
-	bqNull := config.BigQuery.IsNull()
+	// For each nested block, determine whether it is definitively set or
+	// definitively absent (null). An unknown block is neither, so checks that
+	// depend on it are skipped until plan time.
+	blocks := map[string]types.Object{
+		"clickhouse": config.ClickHouse,
+		"bigquery":   config.BigQuery,
+		"postgres":   config.Postgres,
+	}
+	isSet := func(name string) bool { return !blocks[name].IsNull() && !blocks[name].IsUnknown() }
+	names := []string{"clickhouse", "bigquery", "postgres"}
 
-	// Both blocks set is always invalid regardless of destination_type.
-	if chSet && bqSet {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("bigquery"),
+	setCount := 0
+	for _, name := range names {
+		if isSet(name) {
+			setCount++
+		}
+	}
+	if setCount > 1 {
+		resp.Diagnostics.AddError(
 			"Invalid destination configuration",
-			"Only one destination config block may be set. Choose either clickhouse or bigquery to match destination_type.",
+			"Only one destination config block may be set. Choose the one block that matches destination_type.",
 		)
 	}
 
@@ -221,43 +318,23 @@ func (r *destinationResource) ValidateConfig(ctx context.Context, req resource.V
 		return
 	}
 
-	isBigQuery := config.DestinationType.ValueString() == "bigquery"
-
-	if isBigQuery {
-		// Missing bigquery block — flag when definitively null (not unknown).
-		if bqNull {
-			resp.Diagnostics.AddAttributeError(
-				path.Root("bigquery"),
-				"Invalid destination configuration",
-				"BigQuery destinations must define the bigquery block.",
-			)
-		}
-		// Extra clickhouse block — flag when definitively set (not unknown).
-		if chSet {
-			resp.Diagnostics.AddAttributeError(
-				path.Root("clickhouse"),
-				"Invalid destination configuration",
-				"BigQuery destinations cannot define the clickhouse block.",
-			)
-		}
-		return
-	}
-
-	// Non-bigquery: missing clickhouse block — flag when definitively null.
-	if chNull {
+	destinationType := config.DestinationType.ValueString()
+	wanted := blockFor(destinationType)
+	if blocks[wanted].IsNull() {
 		resp.Diagnostics.AddAttributeError(
-			path.Root("clickhouse"),
+			path.Root(wanted),
 			"Invalid destination configuration",
-			fmt.Sprintf("%q destinations must define the clickhouse block.", config.DestinationType.ValueString()),
+			fmt.Sprintf("%s destinations must define the %s block.", typeLabel(destinationType), wanted),
 		)
 	}
-	// Non-bigquery: extra bigquery block — flag when definitively set.
-	if bqSet {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("bigquery"),
-			"Invalid destination configuration",
-			fmt.Sprintf("%q destinations cannot define the bigquery block.", config.DestinationType.ValueString()),
-		)
+	for _, name := range names {
+		if name != wanted && isSet(name) {
+			resp.Diagnostics.AddAttributeError(
+				path.Root(name),
+				"Invalid destination configuration",
+				fmt.Sprintf("%s destinations cannot define the %s block.", typeLabel(destinationType), name),
+			)
+		}
 	}
 }
 
@@ -273,18 +350,20 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 	if diags.HasError() {
 		return nil, fmt.Errorf("reading bigquery config: %v", diags.Errors())
 	}
-	isBigQuery := plan.DestinationType.ValueString() == "bigquery"
-	if isBigQuery && bq == nil {
-		return nil, fmt.Errorf("BigQuery destinations must define the bigquery block")
+	pg, diags := plan.postgres(ctx)
+	if diags.HasError() {
+		return nil, fmt.Errorf("reading postgres config: %v", diags.Errors())
 	}
-	if isBigQuery && ch != nil {
-		return nil, fmt.Errorf("BigQuery destinations cannot define the clickhouse block")
+	destinationType := plan.DestinationType.ValueString()
+	wanted := blockFor(destinationType)
+	present := map[string]bool{"clickhouse": ch != nil, "bigquery": bq != nil, "postgres": pg != nil}
+	if !present[wanted] {
+		return nil, fmt.Errorf("%s destinations must define the %s block", typeLabel(destinationType), wanted)
 	}
-	if !isBigQuery && ch == nil {
-		return nil, fmt.Errorf("%q destinations must define the clickhouse block", plan.DestinationType.ValueString())
-	}
-	if !isBigQuery && bq != nil {
-		return nil, fmt.Errorf("%q destinations cannot define the bigquery block", plan.DestinationType.ValueString())
+	for _, name := range []string{"clickhouse", "bigquery", "postgres"} {
+		if name != wanted && present[name] {
+			return nil, fmt.Errorf("%s destinations cannot define the %s block", typeLabel(destinationType), name)
+		}
 	}
 
 	payload := map[string]interface{}{
@@ -315,6 +394,24 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 		}
 		if !ch.Cluster.IsNull() && !ch.Cluster.IsUnknown() {
 			payload["cluster"] = ch.Cluster.ValueString()
+		}
+	}
+
+	if pg != nil {
+		payload["host"] = pg.Host.ValueString()
+		if !pg.Port.IsNull() && !pg.Port.IsUnknown() {
+			payload["port"] = pg.Port.ValueInt64()
+		}
+		payload["database"] = pg.Database.ValueString()
+		payload["username"] = pg.Username.ValueString()
+		if !pg.Password.IsNull() && !pg.Password.IsUnknown() {
+			payload["password"] = pg.Password.ValueString()
+		}
+		if !pg.DefaultSchema.IsNull() && !pg.DefaultSchema.IsUnknown() {
+			payload["defaultSchema"] = pg.DefaultSchema.ValueString()
+		}
+		if !pg.SSLMode.IsNull() && !pg.SSLMode.IsUnknown() {
+			payload["sslMode"] = pg.SSLMode.ValueString()
 		}
 	}
 
@@ -368,6 +465,37 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 	destType, _ := result["destinationType"].(string)
 
 	switch destType {
+	case "postgres":
+		pg := &postgresModel{}
+		// Password: API returns masked value — preserve state value.
+		oldPG, d := state.postgres(ctx)
+		diags.Append(d...)
+		if oldPG != nil {
+			pg.Password = oldPG.Password
+		} else {
+			pg.Password = types.StringNull()
+		}
+		pg.Host = stringOrNull(result, "host")
+		pg.Database = stringOrNull(result, "database")
+		pg.Username = stringOrNull(result, "username")
+		pg.DefaultSchema = stringOrNull(result, "defaultSchema")
+		pg.SSLMode = stringOrNull(result, "sslMode")
+		switch v := result["port"].(type) {
+		case float64:
+			pg.Port = types.Int64Value(int64(v))
+		case int64:
+			pg.Port = types.Int64Value(v)
+		case int:
+			pg.Port = types.Int64Value(int64(v))
+		default:
+			pg.Port = types.Int64Null()
+		}
+		objVal, d := types.ObjectValueFrom(ctx, postgresAttrTypes, pg)
+		diags.Append(d...)
+		state.Postgres = objVal
+		state.ClickHouse = types.ObjectNull(clickhouseAttrTypes)
+		state.BigQuery = types.ObjectNull(bigqueryAttrTypes)
+
 	case "bigquery":
 		bq := &bigqueryModel{}
 		// Credentials (keyFile): API returns masked value — preserve state value.
@@ -386,6 +514,7 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		diags.Append(d...)
 		state.BigQuery = objVal
 		state.ClickHouse = types.ObjectNull(clickhouseAttrTypes)
+		state.Postgres = types.ObjectNull(postgresAttrTypes)
 
 	default:
 		ch := &clickhouseModel{}
@@ -436,6 +565,7 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		diags.Append(d...)
 		state.ClickHouse = objVal
 		state.BigQuery = types.ObjectNull(bigqueryAttrTypes)
+		state.Postgres = types.ObjectNull(postgresAttrTypes)
 	}
 
 	return diags
@@ -541,9 +671,18 @@ func (r *destinationResource) ImportState(ctx context.Context, req resource.Impo
 		ID:          types.StringValue(parts[1]),
 		ClickHouse:  types.ObjectNull(clickhouseAttrTypes),
 		BigQuery:    types.ObjectNull(bigqueryAttrTypes),
+		Postgres:    types.ObjectNull(postgresAttrTypes),
 	}
 	resp.Diagnostics.Append(r.readAPIIntoState(ctx, result, &state)...)
 	// Password/credentials not available on import — API returns masked values
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// stringOrNull reads a string field of a console response, null when absent.
+func stringOrNull(result map[string]interface{}, key string) types.String {
+	if v, ok := result[key].(string); ok {
+		return types.StringValue(v)
+	}
+	return types.StringNull()
 }

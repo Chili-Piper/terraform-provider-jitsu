@@ -24,6 +24,19 @@ resource "jitsu_destination" "clickhouse" {
     database = "analytics"
   }
 }
+
+resource "jitsu_destination" "postgres" {
+  workspace_id     = jitsu_workspace.main.id
+  id               = "dest-postgres"
+  name             = "Postgres"
+  destination_type = "postgres"
+  postgres = {
+    host     = "10.0.0.5"
+    database = "events"
+    username = "events"
+    password = "changeme"
+  }
+}
 ```
 
 ## Schema
@@ -35,6 +48,9 @@ resource "jitsu_destination" "clickhouse" {
 - `name` (String) - Display name of the destination.
 - `destination_type` (String) - Destination type (e.g., `clickhouse`, `postgres`).
 - `clickhouse.hosts` (List of String) - List of host:port addresses, required inside the `clickhouse` object.
+- `postgres.host`, `postgres.database`, `postgres.username` (String) - required inside the `postgres` object.
+
+Set exactly one of `clickhouse`, `bigquery` or `postgres`: the block that matches `destination_type`. Any type other than `bigquery` and `postgres` uses the `clickhouse` block.
 
 ### Optional
 
@@ -43,6 +59,10 @@ resource "jitsu_destination" "clickhouse" {
 - `clickhouse.password` (String, Sensitive) - Database password. Omission on create uses an empty password. API returns masked value; stored in state from user config.
 - `clickhouse.database` (String) - Database name. Defaults to `default`.
 - `clickhouse.cluster` (String) - ClickHouse cluster name. Defaults to an empty string (no cluster).
+- `postgres.port` (Number) - Defaults to `5432`.
+- `postgres.password` (String, Sensitive) - API returns masked value; stored in state from user config.
+- `postgres.default_schema` (String) - Schema Bulker creates tables in. Defaults to `public`.
+- `postgres.ssl_mode` (String) - `disable`, `require`, `verify-ca` or `verify-full`. Defaults to `require`.
 
 ## Import
 
