@@ -93,6 +93,18 @@ func TestAccDestination_validationRequiresMatchingBlock(t *testing.T) {
 				Config:      testAccDestinationValidationConfig(t, "clickhouse", "both", false),
 				ExpectError: regexp.MustCompile(`"clickhouse" destinations cannot define the bigquery block\.`),
 			},
+			{
+				Config:      testAccDestinationValidationConfig(t, "postgres", "", false),
+				ExpectError: regexp.MustCompile(`"postgres" destinations must define the postgres block\.`),
+			},
+			{
+				Config:      testAccDestinationValidationConfig(t, "postgres", "clickhouse", false),
+				ExpectError: regexp.MustCompile(`"postgres" destinations cannot define the clickhouse block\.`),
+			},
+			{
+				Config:      testAccDestinationValidationConfig(t, "clickhouse", "postgres", false),
+				ExpectError: regexp.MustCompile(`"clickhouse" destinations cannot define the postgres block\.`),
+			},
 		},
 	})
 }
@@ -153,6 +165,14 @@ resource "jitsu_workspace" "test" {
     credentials = "{}"
     project_id  = "project-id"
     bq_dataset  = "dataset"
+  }
+`
+	case "postgres":
+		resourceBody = `
+  postgres = {
+    host     = "10.0.0.1"
+    database = "events"
+    username = "events"
   }
 `
 	case "both":
