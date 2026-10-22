@@ -66,3 +66,66 @@ cluster = "old_cluster"`
 		},
 	})
 }
+
+func TestAccDestination_resetRemovedPostgresPassword(t *testing.T) {
+	suffix := testAccSuffix()
+	destinationID := "destination_pg_reset_" + suffix
+	config := func(destinationType, settings string) string {
+		return fmt.Sprintf(`
+%s
+resource "jitsu_workspace" "test" {
+ name = %q
+ slug = %q
+}
+resource "jitsu_destination" "test" {
+ workspace_id = jitsu_workspace.test.id
+ id = %q
+ name = "Reset postgres password"
+ destination_type = %q
+ %s
+}
+`, testAccProviderConfig(t), "Destination pg reset "+suffix, "destination-pg-reset-"+suffix, destinationID, destinationType, settings)
+	}
+	postgres := func(password string) string {
+		return config("postgres", fmt.Sprintf(`postgres = {
+ host = "postgres"
+ database = "reporting"
+ username = "reporting"
+ %s
+}`, password))
+	}
+	checkPassword := func(s *terraform.State) error {
+		rs, err := testAccGetResourceState(s, "jitsu_destination.test")
+		if err != nil {
+			return err
+		}
+		db, err := sql.Open("postgres", testAccDatabaseURL())
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		var password sql.NullString
+		if err := db.QueryRow(`SELECT config->>'password' FROM newjitsu."ConfigurationObject" WHERE id=$1 AND "workspaceId"=$2 AND deleted=false`, destinationID, rs.Primary.Attributes["workspace_id"]).Scan(&password); err != nil {
+			return err
+		}
+		if !password.Valid || password.String != "" {
+			return fmt.Errorf("removed postgres password was not reset in Console storage")
+		}
+		return nil
+	}
+	clickhouse := config("clickhouse", `clickhouse = {
+ hosts = ["clickhouse:8123"]
+ password = "test-secret"
+}`)
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckDestroyRemote,
+		Steps: []resource.TestStep{
+			{Config: postgres(`password = "test-secret"`)},
+			{Config: postgres(""), Check: checkPassword},
+			{Config: postgres(""), PlanOnly: true},
+			{Config: clickhouse},
+			{Config: postgres(""), Check: checkPassword},
+		},
+	})
+}
