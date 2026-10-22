@@ -62,7 +62,7 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"plaintext": schema.StringAttribute{
 				Required:    true,
 				Sensitive:   true,
-				Description: "Plaintext key value. Must not be empty. Write-only — API returns hashed value on read.",
+				Description: "Plaintext key value. Must not be empty. API returns only a hash on read; stored in state from user config.",
 				Validators:  []validator.String{nonEmptyStreamKey{}},
 			},
 		},
