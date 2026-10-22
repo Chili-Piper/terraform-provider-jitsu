@@ -55,10 +55,12 @@ func (c *Client) getDB() (*sql.DB, error) {
 			"Jitsu uses soft-delete, so re-creating objects with the same ID or workspace slug requires database_url for cleanup")
 	}
 	c.dbOnce.Do(func() {
-		c.db, c.dbErr = sql.Open("postgres", c.databaseURL)
-		if c.dbErr != nil {
+		connector, err := pq.NewConnector(c.databaseURL)
+		if err != nil {
+			c.dbErr = fmt.Errorf("database_url is not a valid PostgreSQL connection string; URL-encode special characters in the user and password")
 			return
 		}
+		c.db = sql.OpenDB(connector)
 		c.db.SetMaxOpenConns(2)
 		c.db.SetMaxIdleConns(1)
 	})
