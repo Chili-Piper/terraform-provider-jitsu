@@ -74,4 +74,4 @@ terraform import jitsu_destination.example <workspace_id>/<destination_id>
 
 ~> **Note:** The password is not available on import because the API returns a masked value.
 
-Removing `clickhouse.protocol`, `clickhouse.username`, or `clickhouse.database` restores the Console defaults (`clickhouse-secure`, `default`, and `default`). Removing a configured `clickhouse.cluster` clears the cluster; removing a configured `clickhouse.password` resets it to an empty password. An omitted password after import remains unmanaged and is preserved.
+Removing `clickhouse.protocol`, `clickhouse.username`, or `clickhouse.database` restores the Console defaults (`clickhouse-secure`, `default`, and `default`). Removing a configured `clickhouse.cluster` clears the cluster; removing a configured `clickhouse.password` or `postgres.password` resets it to an empty password. An omitted password after import remains unmanaged and is preserved.

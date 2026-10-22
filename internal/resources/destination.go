@@ -610,10 +610,17 @@ func (r *destinationResource) Update(ctx context.Context, req resource.UpdateReq
 	resp.Diagnostics.Append(diags...)
 	newCH, diags := plan.clickhouse(ctx)
 	resp.Diagnostics.Append(diags...)
+	oldPG, diags := state.postgres(ctx)
+	resp.Diagnostics.Append(diags...)
+	newPG, diags := plan.postgres(ctx)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	if newCH != nil && newCH.Password.IsNull() && (oldCH == nil || !oldCH.Password.IsNull()) {
+		payload["password"] = ""
+	}
+	if newPG != nil && newPG.Password.IsNull() && (oldPG == nil || !oldPG.Password.IsNull()) {
 		payload["password"] = ""
 	}
 
