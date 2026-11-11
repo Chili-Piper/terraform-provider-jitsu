@@ -77,6 +77,35 @@ func TestReadLinkIntoState_ClearsMissingOptionalFields(t *testing.T) {
 	}
 }
 
+func TestReadLinkIntoState_ClearsSettingsWithoutData(t *testing.T) {
+	ctx := context.Background()
+	for name, link := range map[string]map[string]interface{}{
+		"absent":     {"id": "link_id"},
+		"null":       {"id": "link_id", "data": nil},
+		"not object": {"id": "link_id", "data": []interface{}{"batch"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			funcs, diags := types.ListValueFrom(ctx, types.StringType, []string{"existing_func"})
+			if diags.HasError() {
+				t.Fatalf("unexpected diagnostics building functions list: %v", diags)
+			}
+			state := linkModel{
+				Mode:        types.StringValue("batch"),
+				Frequency:   types.Int64Value(1),
+				Deduplicate: types.BoolValue(true),
+				Functions:   funcs,
+			}
+			if diags := readLinkIntoState(ctx, link, &state); diags.HasError() {
+				t.Fatalf("unexpected diagnostics: %v", diags)
+			}
+			if !state.Mode.IsNull() || !state.Frequency.IsNull() || !state.Deduplicate.IsNull() || !state.Functions.IsNull() {
+				t.Fatalf("settings should be null, got mode=%v frequency=%v deduplicate=%v functions=%v",
+					state.Mode, state.Frequency, state.Deduplicate, state.Functions)
+			}
+		})
+	}
+}
+
 func TestReadLinkIntoState_ParsesFields(t *testing.T) {
 	ctx := context.Background()
 
