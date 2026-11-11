@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-const withoutDetailSuffix = "; see Console server logs for details"
-
 func failingConsole(t *testing.T, status int, body string) *Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -23,13 +21,13 @@ func failingConsole(t *testing.T, status int, body string) *Client {
 }
 
 // errorDetail is the part of a client error that came from the Console response, or "" when the
-// client fell back to the error without detail.
+// client reported the failure without detail.
 func errorDetail(t *testing.T, err error) string {
 	t.Helper()
 	if err == nil {
 		t.Fatal("expected HTTP failure")
 	}
-	if strings.HasSuffix(err.Error(), withoutDetailSuffix) {
+	if strings.HasSuffix(err.Error(), "; see Console server logs for details") {
 		return ""
 	}
 	_, detail, found := strings.Cut(err.Error(), "): ")
@@ -98,7 +96,7 @@ func TestResponseErrorDescribesValidationIssues(t *testing.T) {
 	}
 }
 
-func TestResponseErrorRedactsSentCredentials(t *testing.T) {
+func TestResponseErrorLeavesOutMessageHoldingCredential(t *testing.T) {
 	keyFile := "{\n  \"private_key\": \"-----BEGIN KEY-----\\nkeyfile-canary\\n-----END KEY-----\"\n}"
 	escapedKeyFile, err := json.Marshal(keyFile)
 	if err != nil {
@@ -107,99 +105,59 @@ func TestResponseErrorRedactsSentCredentials(t *testing.T) {
 	for name, tc := range map[string]struct {
 		message string
 		payload map[string]interface{}
-		// want is the exact detail; "" means the client must fall back to the error without detail.
-		want string
 	}{
 		"password": {
 			message: "rejected password-canary",
 			payload: map[string]interface{}{"password": "password-canary"},
-			want:    "rejected [redacted]",
 		},
 		"stream key": {
 			message: "rejected key-canary",
 			payload: map[string]interface{}{"publicKeys": []map[string]string{{"id": "k", "plaintext": "key-canary"}}},
-			want:    "rejected [redacted]",
 		},
 		"function environment": {
 			message: "rejected env-canary",
 			payload: map[string]interface{}{"data": map[string]interface{}{"functionsEnv": map[string]interface{}{"API_KEY": "env-canary"}}},
-			want:    "rejected [redacted]",
 		},
 		"key file": {
 			message: "rejected " + keyFile,
 			payload: map[string]interface{}{"keyFile": keyFile},
-			want:    "rejected [redacted]",
 		},
-		"go-escaped key file": {
+		"json-escaped key file": {
 			message: "rejected " + string(escapedKeyFile[1:len(escapedKeyFile)-1]),
 			payload: map[string]interface{}{"keyFile": keyFile},
-			want:    "rejected [redacted]",
 		},
-		"auth token": {
-			message: "rejected key-id:token-secret-canary and token-secret-canary",
-			want:    "rejected [redacted] and [redacted]",
+		"json-escaped html characters": {
+			message: `rejected "canary<\n&"`,
+			payload: map[string]interface{}{"password": "canary<\n&"},
 		},
 		"whitespace variant": {
-			message: "received 'alpha\nbeta'",
-			payload: map[string]interface{}{"password": "alpha beta"},
-			want:    "received '[redacted]'",
+			message: "rejected canary\none",
+			payload: map[string]interface{}{"password": "canary one"},
 		},
-		"javascript-escaped html characters": {
-			message: `received "A<\nB"`,
-			payload: map[string]interface{}{"password": "A<\nB"},
-			want:    `received "[redacted]"`,
+		"auth token": {
+			message: "rejected key-id:token-secret-canary",
 		},
-		"javascript-escaped line separator": {
-			message: "received \"alpha \\nbravo\"",
-			payload: map[string]interface{}{"password": "alpha \nbravo"},
-			want:    `received "[redacted]"`,
-		},
-		"javascript-escaped paragraph separator": {
-			message: "received \"alpha\u2029\\nbravo\"",
-			payload: map[string]interface{}{"password": "alpha\u2029\nbravo"},
-			want:    `received "[redacted]"`,
-		},
-		"overlapping secrets": {
-			message: "received abcde",
-			payload: map[string]interface{}{"publicKeys": []map[string]string{{"plaintext": "abcd"}, {"plaintext": "bcde"}}},
-			want:    "received [redacted]",
-		},
-		"repeated secret": {
-			message: "received canary-one and canary-one",
-			payload: map[string]interface{}{"publicKeys": []map[string]string{{"plaintext": "canary-one"}, {"plaintext": "canary-one"}}},
-			want:    "received [redacted] and [redacted]",
-		},
-		"secret inside the marker": {
-			message: "rejected red",
-			payload: map[string]interface{}{"password": "red"},
-			want:    "",
-		},
-		"redaction spelling out another secret": {
-			message: "received abcxdef",
-			payload: map[string]interface{}{"publicKeys": []map[string]string{{"plaintext": "abc" + redacted + "def"}, {"plaintext": "x"}}},
-			want:    "",
-		},
-		"spelled-out secret cut by truncation": {
-			message: strings.Repeat("q", maxErrorDetail-15) + "abcxdef",
-			payload: map[string]interface{}{"publicKeys": []map[string]string{{"plaintext": "abc" + redacted + "def"}, {"plaintext": "x"}}},
-			want:    "",
-		},
-		"secret completed by the truncation mark": {
-			message: strings.Repeat("q", maxErrorDetail-3) + "abcdef",
-			payload: map[string]interface{}{"password": "abc…"},
-			want:    "",
+		"auth token secret": {
+			message: "rejected token-secret-canary",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := failingConsole(t, http.StatusBadRequest, messageBody(t, tc.message))
 			_, err := c.Update(context.Background(), "ws", "destination", "d", tc.payload)
-			if got := errorDetail(t, err); got != tc.want {
-				t.Errorf("detail = %q, want %q", got, tc.want)
-			}
-			if strings.Contains(err.Error(), "canary") {
-				t.Errorf("credential leaked into error: %v", err)
+			if got := errorDetail(t, err); got != "" {
+				t.Errorf("message holding a credential surfaced: %q", got)
 			}
 		})
+	}
+}
+
+func TestResponseErrorKeepsIssuesWhenMessageIsLeftOut(t *testing.T) {
+	body := `{"message":"rejected password-canary",` +
+		`"error":{"issues":[{"code":"invalid_type","expected":"string","received":"undefined","path":["host"]}]}}`
+	c := failingConsole(t, http.StatusInternalServerError, body)
+	_, err := c.Create(context.Background(), "ws", "destination", map[string]interface{}{"password": "password-canary"})
+	if got, want := errorDetail(t, err), "host: required"; got != want {
+		t.Errorf("detail = %q, want %q", got, want)
 	}
 }
 

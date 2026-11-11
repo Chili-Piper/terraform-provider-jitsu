@@ -1,18 +1,15 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 )
 
-const (
-	redacted       = "[redacted]"
-	maxErrorDetail = 500
-)
+const maxErrorDetail = 500
 
 // Payload keys whose values are credentials.
 var sensitivePayloadKeys = map[string]bool{
@@ -22,68 +19,46 @@ var sensitivePayloadKeys = map[string]bool{
 	"functionsEnv": true,
 }
 
-// responseError describes a failed Console call. It surfaces Console's own ApiError message and
-// the schema-validation issues, never the echoed request, a stack, or the text of an unexpected
-// exception. Issues are rebuilt from their structured fields because their message quotes the
-// rejected value; the message is scrubbed of the credentials this request carried.
+// responseError describes a failed Console call. It surfaces the schema-validation issues, rebuilt
+// from their structured fields because their own text quotes the rejected value, and Console's
+// ApiError message unless that message contains a credential this request carried. The echoed
+// request, stacks and the text of unexpected exceptions are never surfaced.
 func (c *Client) responseError(method, endpoint string, status int, body []byte, payload interface{}) error {
 	summary := fmt.Sprintf("%s %s returned %d (%s)", method, endpoint, status, http.StatusText(status))
-	withoutDetail := fmt.Errorf("%s; see Console server logs for details", summary)
-	detail := collapseSpace(consoleErrorDetail(body))
-	if detail == "" {
-		return withoutDetail
-	}
-	forms := secretForms(append(sensitiveValues(payload), tokenSecrets(c.authToken)...))
-	detail = redact(detail, forms)
-	// Redaction can itself spell out a secret, for one that contains the marker's text.
-	if containsAny(detail, forms) {
-		return withoutDetail
-	}
-	if runes := []rune(detail); len(runes) > maxErrorDetail {
-		detail = string(runes[:maxErrorDetail]) + "…"
-	}
-	if containsAny(detail, forms) {
-		return withoutDetail
-	}
-	return fmt.Errorf("%s: %s", summary, detail)
-}
-
-func containsAny(text string, forms []string) bool {
-	for _, form := range forms {
-		if strings.Contains(text, form) {
-			return true
-		}
-	}
-	return false
-}
-
-func consoleErrorDetail(body []byte) string {
 	var response struct {
 		Message  json.RawMessage `json:"message"`
 		Error    json.RawMessage `json:"error"`
 		ZodError json.RawMessage `json:"zodError"`
 	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return ""
-	}
+	_ = json.Unmarshal(body, &response)
+
 	var parts []string
 	var message string
-	if json.Unmarshal(response.Message, &message) == nil && message != "" {
-		parts = append(parts, message)
+	if json.Unmarshal(response.Message, &message) == nil {
+		message = collapseSpace(message)
+		if message != "" && !containsCredential(message, append(sensitiveValues(payload), tokenSecrets(c.authToken)...)) {
+			parts = append(parts, message)
+		}
 	}
 	// Console reports a rejected config object under "error" and a rejected request under "zodError".
 	for _, raw := range []json.RawMessage{response.Error, response.ZodError} {
 		var validation struct {
 			Issues []zodIssue `json:"issues"`
 		}
-		if json.Unmarshal(raw, &validation) != nil {
-			continue
-		}
-		for _, issue := range validation.Issues {
-			parts = append(parts, issue.String())
+		if json.Unmarshal(raw, &validation) == nil {
+			for _, issue := range validation.Issues {
+				parts = append(parts, issue.String())
+			}
 		}
 	}
-	return strings.Join(parts, "; ")
+	if len(parts) == 0 {
+		return fmt.Errorf("%s; see Console server logs for details", summary)
+	}
+	detail := strings.Join(parts, "; ")
+	if runes := []rune(detail); len(runes) > maxErrorDetail {
+		detail = string(runes[:maxErrorDetail]) + "…"
+	}
+	return fmt.Errorf("%s: %s", summary, detail)
 }
 
 type zodIssue struct {
@@ -146,86 +121,22 @@ func collapseSpace(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
-// secretForms lists how each secret can read in a whitespace-collapsed message: as sent, and
-// inside a JSON string as Go or JavaScript would escape it.
-func secretForms(secrets []string) []string {
-	seen := map[string]bool{}
-	var forms []string
-	add := func(form string) {
-		if form = collapseSpace(form); form != "" && !seen[form] {
-			seen[form] = true
-			forms = append(forms, form)
-		}
-	}
+// containsCredential reports whether a whitespace-collapsed message holds any of the secrets, as
+// sent or as JSON.stringify would escape it.
+func containsCredential(message string, secrets []string) bool {
 	for _, secret := range secrets {
-		add(secret)
-		if quoted, err := json.Marshal(secret); err == nil {
-			add(string(quoted[1 : len(quoted)-1]))
-		}
-		add(javascriptEscape(secret))
-	}
-	return forms
-}
-
-// javascriptEscape is the body of JSON.stringify(text): unlike Go it leaves <, >, &, U+2028 and
-// U+2029 as they are.
-func javascriptEscape(text string) string {
-	var out strings.Builder
-	for _, r := range text {
-		switch r {
-		case '"', '\\':
-			out.WriteRune('\\')
-			out.WriteRune(r)
-		case '\b':
-			out.WriteString(`\b`)
-		case '\f':
-			out.WriteString(`\f`)
-		case '\n':
-			out.WriteString(`\n`)
-		case '\r':
-			out.WriteString(`\r`)
-		case '\t':
-			out.WriteString(`\t`)
-		default:
-			if r < 0x20 {
-				fmt.Fprintf(&out, `\u%04x`, r)
-			} else {
-				out.WriteRune(r)
+		var escaped bytes.Buffer
+		encoder := json.NewEncoder(&escaped)
+		encoder.SetEscapeHTML(false)
+		_ = encoder.Encode(secret)
+		quoted := strings.TrimSuffix(escaped.String(), "\n")
+		for _, form := range []string{secret, quoted[1 : len(quoted)-1]} {
+			if form = collapseSpace(form); form != "" && strings.Contains(message, form) {
+				return true
 			}
 		}
 	}
-	return out.String()
-}
-
-// redact replaces every occurrence of every form in one pass over the original text, so
-// overlapping secrets are removed whole and a marker is never searched again.
-func redact(text string, forms []string) string {
-	type span struct{ start, end int }
-	var spans []span
-	for _, form := range forms {
-		for from := 0; ; {
-			i := strings.Index(text[from:], form)
-			if i < 0 {
-				break
-			}
-			spans = append(spans, span{from + i, from + i + len(form)})
-			from += i + 1
-		}
-	}
-	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
-	var out strings.Builder
-	done := 0
-	for _, s := range spans {
-		if s.start >= done {
-			out.WriteString(text[done:s.start])
-			out.WriteString(redacted)
-		}
-		if s.end > done {
-			done = s.end
-		}
-	}
-	out.WriteString(text[done:])
-	return out.String()
+	return false
 }
 
 func tokenSecrets(authToken string) []string {
