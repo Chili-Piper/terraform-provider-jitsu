@@ -480,16 +480,7 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		pg.Username = stringOrNull(result, "username")
 		pg.DefaultSchema = stringOrNull(result, "defaultSchema")
 		pg.SSLMode = stringOrNull(result, "sslMode")
-		switch v := result["port"].(type) {
-		case float64:
-			pg.Port = types.Int64Value(int64(v))
-		case int64:
-			pg.Port = types.Int64Value(v)
-		case int:
-			pg.Port = types.Int64Value(int64(v))
-		default:
-			pg.Port = types.Int64Null()
-		}
+		pg.Port = int64OrNull(result, "port")
 		objVal, d := types.ObjectValueFrom(ctx, postgresAttrTypes, pg)
 		diags.Append(d...)
 		state.Postgres = objVal
@@ -504,12 +495,8 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		if oldBQ != nil {
 			bq.Credentials = oldBQ.Credentials
 		}
-		if v, ok := result["project"].(string); ok {
-			bq.ProjectID = types.StringValue(v)
-		}
-		if v, ok := result["bqDataset"].(string); ok {
-			bq.BQDataset = types.StringValue(v)
-		}
+		bq.ProjectID = stringOrNull(result, "project")
+		bq.BQDataset = stringOrNull(result, "bqDataset")
 		objVal, d := types.ObjectValueFrom(ctx, bigqueryAttrTypes, bq)
 		diags.Append(d...)
 		state.BigQuery = objVal
@@ -518,11 +505,7 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 
 	default:
 		ch := &clickhouseModel{}
-		if v, ok := result["protocol"].(string); ok {
-			ch.Protocol = types.StringValue(v)
-		} else {
-			ch.Protocol = types.StringNull()
-		}
+		ch.Protocol = stringOrNull(result, "protocol")
 		if hosts, ok := result["hosts"].([]interface{}); ok {
 			hostStrs := make([]string, 0, len(hosts))
 			for _, h := range hosts {
@@ -540,27 +523,15 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		} else {
 			ch.Hosts = types.ListNull(types.StringType)
 		}
-		if v, ok := result["username"].(string); ok {
-			ch.Username = types.StringValue(v)
-		} else {
-			ch.Username = types.StringNull()
-		}
+		ch.Username = stringOrNull(result, "username")
 		// Password: API returns masked value — preserve state value.
 		oldCH, d := state.clickhouse(ctx)
 		diags.Append(d...)
 		if oldCH != nil {
 			ch.Password = oldCH.Password
 		}
-		if v, ok := result["database"].(string); ok {
-			ch.Database = types.StringValue(v)
-		} else {
-			ch.Database = types.StringNull()
-		}
-		if v, ok := result["cluster"].(string); ok {
-			ch.Cluster = types.StringValue(v)
-		} else {
-			ch.Cluster = types.StringNull()
-		}
+		ch.Database = stringOrNull(result, "database")
+		ch.Cluster = stringOrNull(result, "cluster")
 		objVal, d := types.ObjectValueFrom(ctx, clickhouseAttrTypes, ch)
 		diags.Append(d...)
 		state.ClickHouse = objVal
@@ -684,12 +655,4 @@ func (r *destinationResource) ImportState(ctx context.Context, req resource.Impo
 	// Password/credentials not available on import — API returns masked values
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-}
-
-// stringOrNull reads a string field of a console response, null when absent.
-func stringOrNull(result map[string]interface{}, key string) types.String {
-	if v, ok := result[key].(string); ok {
-		return types.StringValue(v)
-	}
-	return types.StringNull()
 }

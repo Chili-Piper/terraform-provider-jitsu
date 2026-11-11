@@ -264,19 +264,6 @@ func (r *linkResource) findLink(ctx context.Context, workspaceID, fromID, toID s
 	return nil, nil
 }
 
-func toInt64(v interface{}) (int64, bool) {
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case int64:
-		return n, true
-	case float64:
-		return int64(n), true
-	default:
-		return 0, false
-	}
-}
-
 func readLinkIntoState(ctx context.Context, link map[string]interface{}, state *linkModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
@@ -290,72 +277,18 @@ func readLinkIntoState(ctx context.Context, link map[string]interface{}, state *
 		state.ToID = types.StringValue(v)
 	}
 
+	// A link without data reads every setting as null: lookups on the nil map miss.
 	data, _ := link["data"].(map[string]interface{})
-	if data == nil {
-		state.Mode = types.StringNull()
-		state.DataLayout = types.StringNull()
-		state.PrimaryKey = types.StringNull()
-		state.Frequency = types.Int64Null()
-		state.BatchSize = types.Int64Null()
-		state.Deduplicate = types.BoolNull()
-		state.DeduplicateWindow = types.Int64Null()
-		state.SchemaFreeze = types.BoolNull()
-		state.TimestampColumn = types.StringNull()
-		state.KeepOriginalNames = types.BoolNull()
-		state.Functions = types.ListNull(types.StringType)
-		return diags
-	}
-
-	if v, ok := data["mode"].(string); ok {
-		state.Mode = types.StringValue(v)
-	} else {
-		state.Mode = types.StringNull()
-	}
-	if v, ok := data["dataLayout"].(string); ok {
-		state.DataLayout = types.StringValue(v)
-	} else {
-		state.DataLayout = types.StringNull()
-	}
-	if v, ok := data["primaryKey"].(string); ok {
-		state.PrimaryKey = types.StringValue(v)
-	} else {
-		state.PrimaryKey = types.StringNull()
-	}
-	if v, ok := toInt64(data["frequency"]); ok {
-		state.Frequency = types.Int64Value(v)
-	} else {
-		state.Frequency = types.Int64Null()
-	}
-	if v, ok := toInt64(data["batchSize"]); ok {
-		state.BatchSize = types.Int64Value(v)
-	} else {
-		state.BatchSize = types.Int64Null()
-	}
-	if v, ok := data["deduplicate"].(bool); ok {
-		state.Deduplicate = types.BoolValue(v)
-	} else {
-		state.Deduplicate = types.BoolNull()
-	}
-	if v, ok := toInt64(data["deduplicateWindow"]); ok {
-		state.DeduplicateWindow = types.Int64Value(v)
-	} else {
-		state.DeduplicateWindow = types.Int64Null()
-	}
-	if v, ok := data["schemaFreeze"].(bool); ok {
-		state.SchemaFreeze = types.BoolValue(v)
-	} else {
-		state.SchemaFreeze = types.BoolNull()
-	}
-	if v, ok := data["timestampColumn"].(string); ok {
-		state.TimestampColumn = types.StringValue(v)
-	} else {
-		state.TimestampColumn = types.StringNull()
-	}
-	if v, ok := data["keepOriginalNames"].(bool); ok {
-		state.KeepOriginalNames = types.BoolValue(v)
-	} else {
-		state.KeepOriginalNames = types.BoolNull()
-	}
+	state.Mode = stringOrNull(data, "mode")
+	state.DataLayout = stringOrNull(data, "dataLayout")
+	state.PrimaryKey = stringOrNull(data, "primaryKey")
+	state.Frequency = int64OrNull(data, "frequency")
+	state.BatchSize = int64OrNull(data, "batchSize")
+	state.Deduplicate = boolOrNull(data, "deduplicate")
+	state.DeduplicateWindow = int64OrNull(data, "deduplicateWindow")
+	state.SchemaFreeze = boolOrNull(data, "schemaFreeze")
+	state.TimestampColumn = stringOrNull(data, "timestampColumn")
+	state.KeepOriginalNames = boolOrNull(data, "keepOriginalNames")
 
 	// Transform function IDs: strip udf. prefix. A present-but-empty functions key
 	// must round-trip as an empty list, not null, or refresh plans updates forever.
