@@ -31,7 +31,7 @@ func testAccProviderConfig(t *testing.T) string {
 
 	authToken := os.Getenv("JITSU_AUTH_TOKEN")
 	if authToken == "" {
-		authToken = "test-auth-token"
+		authToken = "tfacc:workbench-only-key"
 	}
 
 	return fmt.Sprintf(`

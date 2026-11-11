@@ -28,10 +28,11 @@ make test
 # or: go test ./... -v
 ```
 
-Run acceptance tests (requires environment setup):
+Run acceptance tests against the local workbench (Console pinned to the deployed version):
 ```bash
+make workbench-up
 make testacc
-# or: TF_ACC=1 go test ./... -v -timeout 120s
+make workbench-down
 ```
 
 Run a single test:
@@ -41,7 +42,7 @@ TF_ACC=1 go test ./internal/provider -v -run TestAccFunctionResource
 
 ## Environment Variables for Testing
 
-Acceptance tests require:
+`make testacc` points these at the workbench by default. Set them to run against another Console:
 - `JITSU_CONSOLE_URL` - Jitsu Console URL (e.g., http://localhost:3300)
 - `JITSU_AUTH_TOKEN` - Bearer token for API authentication (user API key in `keyId:secret` format)
   - Admin tokens don't work due to API limitations (e.g., during workspace creation the API associates it with the user).
