@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
@@ -112,14 +113,46 @@ func (m *destinationModel) postgres(ctx context.Context) (*postgresModel, diag.D
 	return &pg, diags
 }
 
-// blockFor names the config block a destination type needs: bigquery and postgres have their own,
-// every other type uses the clickhouse block.
+// blockFor names the config block a destination type needs. A type the provider cannot configure,
+// seen only when reading a destination changed outside Terraform, reads into the clickhouse block.
 func blockFor(destinationType string) string {
 	switch destinationType {
 	case "bigquery", "postgres":
 		return destinationType
 	default:
 		return "clickhouse"
+	}
+}
+
+func validateDestinationType(value types.String) error {
+	if value.IsNull() || value.IsUnknown() {
+		return nil
+	}
+	switch value.ValueString() {
+	case "clickhouse", "bigquery", "postgres":
+		return nil
+	// Console accepts the clickhouse block for these two and drops its fields, so configurations
+	// using them applied before this check existed. It rejects the block for every other type.
+	case "devnull", "salesforce":
+		return nil
+	default:
+		return fmt.Errorf("destination_type must be clickhouse, bigquery, or postgres; got %q", value.ValueString())
+	}
+}
+
+type destinationTypeValidator struct{}
+
+func (destinationTypeValidator) Description(context.Context) string {
+	return "Destination type must be clickhouse, bigquery, or postgres."
+}
+
+func (v destinationTypeValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (destinationTypeValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if err := validateDestinationType(req.ConfigValue); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid destination type", err.Error())
 	}
 }
 
@@ -172,7 +205,8 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"destination_type": schema.StringAttribute{
 				Required:    true,
-				Description: "Destination type (e.g., clickhouse, bigquery, postgres).",
+				Description: "Destination type: clickhouse, bigquery, or postgres.",
+				Validators:  []validator.String{destinationTypeValidator{}},
 			},
 			"clickhouse": schema.SingleNestedAttribute{
 				Optional:    true,
@@ -313,8 +347,8 @@ func (r *destinationResource) ValidateConfig(ctx context.Context, req resource.V
 		)
 	}
 
-	// Without a known destination_type we can't do type-specific checks.
-	if config.DestinationType.IsNull() || config.DestinationType.IsUnknown() {
+	// Without a known, supported destination_type we can't do type-specific checks.
+	if config.DestinationType.IsNull() || config.DestinationType.IsUnknown() || validateDestinationType(config.DestinationType) != nil {
 		return
 	}
 
@@ -353,6 +387,9 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 	pg, diags := plan.postgres(ctx)
 	if diags.HasError() {
 		return nil, fmt.Errorf("reading postgres config: %v", diags.Errors())
+	}
+	if err := validateDestinationType(plan.DestinationType); err != nil {
+		return nil, err
 	}
 	destinationType := plan.DestinationType.ValueString()
 	wanted := blockFor(destinationType)
@@ -670,6 +707,14 @@ func (r *destinationResource) ImportState(ctx context.Context, req resource.Impo
 	}
 	if result == nil {
 		resp.Diagnostics.AddError("Destination not found", fmt.Sprintf("Destination %s not found in workspace %s", parts[1], parts[0]))
+		return
+	}
+
+	if destinationType, ok := result["destinationType"].(string); ok && validateDestinationType(types.StringValue(destinationType)) != nil {
+		resp.Diagnostics.AddError(
+			"Unsupported destination type",
+			fmt.Sprintf("Destination %s has type %q; the provider manages clickhouse, bigquery, and postgres destinations", parts[1], destinationType),
+		)
 		return
 	}
 

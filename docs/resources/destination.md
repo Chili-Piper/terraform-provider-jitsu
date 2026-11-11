@@ -46,11 +46,11 @@ resource "jitsu_destination" "postgres" {
 - `workspace_id` (String) - Jitsu workspace ID. Changing this forces a new resource.
 - `id` (String) - Destination ID. Changing this forces a new resource.
 - `name` (String) - Display name of the destination.
-- `destination_type` (String) - Destination type (e.g., `clickhouse`, `postgres`).
+- `destination_type` (String) - Destination type: `clickhouse`, `bigquery`, or `postgres`.
 - `clickhouse.hosts` (List of String) - List of host:port addresses, required inside the `clickhouse` object.
 - `postgres.host`, `postgres.database`, `postgres.username` (String) - required inside the `postgres` object.
 
-Set exactly one of `clickhouse`, `bigquery` or `postgres`: the block that matches `destination_type`. Any type other than `bigquery` and `postgres` uses the `clickhouse` block.
+Set exactly one of `clickhouse`, `bigquery` or `postgres`: the block that matches `destination_type`. Other types are rejected at plan time, except `devnull` and `salesforce`, which Console accepts with a `clickhouse` block whose fields it ignores.
 
 ### Optional
 

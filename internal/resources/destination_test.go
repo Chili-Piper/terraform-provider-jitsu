@@ -379,3 +379,24 @@ func TestDestinationReadAPIIntoState_Postgres(t *testing.T) {
 		t.Fatal("clickhouse and bigquery should be null for a postgres destination")
 	}
 }
+
+func TestDestinationBuildPayload_RejectsUnsupportedType(t *testing.T) {
+	ctx := context.Background()
+
+	hosts, diags := types.ListValueFrom(ctx, types.StringType, []string{"clickhouse:8123"})
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics building hosts: %v", diags)
+	}
+
+	for destinationType, wantErr := range map[string]bool{"snowflake": true, "clickhouse": false, "devnull": false} {
+		plan := destinationModel{
+			DestinationType: types.StringValue(destinationType),
+			ClickHouse:      mustClickhouseObject(t, ctx, &clickhouseModel{Hosts: hosts}),
+			BigQuery:        types.ObjectNull(bigqueryAttrTypes),
+			Postgres:        types.ObjectNull(postgresAttrTypes),
+		}
+		if _, err := (&destinationResource{}).buildPayload(ctx, &plan); (err != nil) != wantErr {
+			t.Errorf("%s: buildPayload error = %v, want error %v", destinationType, err, wantErr)
+		}
+	}
+}
