@@ -1,7 +1,11 @@
 package provider_test
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -207,4 +211,120 @@ resource "jitsu_link" "test" {
   functions           = %[7]s
 }
 `, providerConfig, testAccWorkspaceName("TF Link Workspace", suffix), testAccWorkspaceSlug("tf-acc-link", suffix), streamID, destinationID, functionID, functionsExpr)
+}
+
+func TestAccLink_builtinFunctionID(t *testing.T) {
+	suffix := testAccSuffix()
+	config := testAccLinkConfigWithFunction(t, suffix, "builtin_stream_"+suffix, "builtin_dest_"+suffix, "function_"+suffix, true)
+	config = strings.Replace(config, "[jitsu_function.link_test.id]", `["builtin.transformation.user-recognition"]`, 1)
+	check := func(s *terraform.State) error {
+		rs := s.RootModule().Resources["jitsu_link.test"].Primary
+		c := testAccRemoteClient()
+		defer c.Close()
+		links, err := c.List(context.Background(), rs.Attributes["workspace_id"], "link")
+		if err != nil {
+			return err
+		}
+		for _, link := range links {
+			if link["id"] == rs.ID {
+				functions := link["data"].(map[string]interface{})["functions"].([]interface{})
+				got := functions[0].(map[string]interface{})["functionId"]
+				if got != "builtin.transformation.user-recognition" {
+					return fmt.Errorf("built-in function replaced with nonexistent UDF: %v", got)
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("link not found")
+	}
+	changed := strings.Replace(config, "batch_size          = 10000", "batch_size          = 20000", 1)
+	resource.Test(t, resource.TestCase{ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, CheckDestroy: testAccCheckDestroyRemote, Steps: []resource.TestStep{
+		{Config: config, Check: check}, {Config: changed, Check: check}, {Config: changed, PlanOnly: true},
+	}})
+}
+
+func TestAccLink_preservesFunctionOptions(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC is not set")
+	}
+	suffix := testAccSuffix()
+	config := testAccLinkConfigWithFunction(t, suffix, "options_stream_"+suffix, "options_dest_"+suffix, "options_function_"+suffix, true)
+	changed := strings.Replace(config, "batch_size          = 10000", "batch_size          = 20000", 1)
+	ctx := context.Background()
+	c := testAccRemoteClient()
+	defer c.Close()
+	var linkID string
+	find := func(s *terraform.State) (map[string]interface{}, error) {
+		rs, err := testAccGetResourceState(s, "jitsu_link.test")
+		if err != nil {
+			return nil, err
+		}
+		links, err := c.List(ctx, rs.Primary.Attributes["workspace_id"], "link")
+		if err != nil {
+			return nil, err
+		}
+		for _, link := range links {
+			if link["id"] == rs.Primary.ID {
+				return link, nil
+			}
+		}
+		return nil, fmt.Errorf("link not found")
+	}
+	resource.Test(t, resource.TestCase{ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, CheckDestroy: testAccCheckDestroyRemote, Steps: []resource.TestStep{
+		{Config: config, Check: func(s *terraform.State) error {
+			link, err := find(s)
+			if err != nil {
+				return err
+			}
+			linkID = link["id"].(string)
+			functions := link["data"].(map[string]interface{})["functions"].([]interface{})
+			functions[0].(map[string]interface{})["functionOptions"] = map[string]interface{}{"target": "events_archive"}
+			_, err = c.Create(ctx, link["workspaceId"].(string), "link", link)
+			return err
+		}},
+		{Config: changed, ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("jitsu_link.test", plancheck.ResourceActionUpdate)}}, Check: func(s *terraform.State) error {
+			link, err := find(s)
+			if err != nil {
+				return err
+			}
+			if link["id"] != linkID {
+				return fmt.Errorf("link ID changed")
+			}
+			functions := link["data"].(map[string]interface{})["functions"].([]interface{})
+			options, ok := functions[0].(map[string]interface{})["functionOptions"].(map[string]interface{})
+			if !ok || options["target"] != "events_archive" {
+				return fmt.Errorf("batch size update erased function options")
+			}
+			return nil
+		}},
+		{Config: changed, PlanOnly: true},
+		{Config: strings.Replace(changed, "[jitsu_function.link_test.id]", "[]", 1), Check: testAccCheckLinkRemoteFunctions("jitsu_link.test")},
+		{Config: strings.Replace(changed, "[jitsu_function.link_test.id]", "[]", 1), PlanOnly: true},
+	}})
+}
+
+func TestLink_dataLayoutValidation(t *testing.T) {
+	config := func(layout string) string {
+		return fmt.Sprintf(`
+%s
+resource "jitsu_link" "test" {
+  workspace_id = "layout-validation"
+  from_id = "stream"
+  to_id = "destination"
+  data_layout = %s
+}
+`, testAccProviderConfig(t), layout)
+	}
+	steps := []resource.TestStep{}
+	for _, layout := range []string{"segment", "segment-single-table", "jitsu-legacy", "passthrough"} {
+		steps = append(steps, resource.TestStep{Config: config(fmt.Sprintf("%q", layout)), PlanOnly: true, ExpectNonEmptyPlan: true})
+	}
+	steps = append(steps, resource.TestStep{Config: config("null"), PlanOnly: true, ExpectNonEmptyPlan: true})
+	for _, layout := range []string{"segment_single_table", "", "toString"} {
+		steps = append(steps, resource.TestStep{Config: config(fmt.Sprintf("%q", layout)), PlanOnly: true, ExpectError: regexp.MustCompile("Invalid data layout")})
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps:                    steps,
+	})
 }
