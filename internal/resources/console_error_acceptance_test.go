@@ -53,4 +53,8 @@ func TestAccAuditConsoleErrorSecret(t *testing.T) {
 			t.Fatal("Console validation response leaked password through Terraform diagnostic")
 		}
 	}
+
+	if detail := resp.Diagnostics[0].Detail(); !strings.Contains(detail, "protocol: ") {
+		t.Fatalf("diagnostic does not name the rejected field: %s", detail)
+	}
 }
