@@ -167,18 +167,16 @@ terraform import jitsu_link.site_to_clickhouse <workspace_id>/<from_id>/<to_id>
 make test
 ```
 
-- Acceptance tests:
+- Acceptance tests, against a real Console in the local workbench:
 
 ```bash
-TF_ACC=1 go test ./internal/provider -v -timeout 300s
-# or
+make workbench-up   # Console pinned to the deployed version, plus a seeded API key
 make testacc
+make workbench-down
 ```
 
-Common environment variables:
+`make testacc` targets the workbench by default. Set `JITSU_CONSOLE_URL`, `JITSU_AUTH_TOKEN` and
+`JITSU_DATABASE_URL` to point it elsewhere. CI runs `make workbench-up` and `make testacc` on every pull request.
 
-- `JITSU_CONSOLE_URL`
-- `JITSU_AUTH_TOKEN`
-- `JITSU_DATABASE_URL`
-
-Local stack for testing is available at `workbench/docker-compose.yaml`.
+When the jitsu chart moves to a new Console version, bump `jitsucom/console` in
+`workbench/docker-compose.yaml` first: the acceptance run shows whether the provider still works with it.

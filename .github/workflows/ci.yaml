@@ -27,3 +27,20 @@ jobs:
           echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
 
       - run: go test ./... -timeout 60s
+
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - run: make workbench-up
+
+      - run: make testacc
+
+      - name: Console logs
+        if: failure()
+        run: docker compose -f workbench/docker-compose.yaml logs jitsu-console

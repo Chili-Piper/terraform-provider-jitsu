@@ -26,7 +26,7 @@
 ## Testing Guidelines
 - Framework: `terraform-plugin-testing` acceptance-style tests in `internal/provider/`.
 - Test names follow `TestAcc<Resource>_<scenario>` (for example, `TestAccFunction_basic`).
-- Acceptance tests require:
+- `make testacc` targets the local workbench (`make workbench-up`) by default; to use another Console set:
   - `JITSU_CONSOLE_URL`
   - `JITSU_AUTH_TOKEN`
   - `JITSU_DATABASE_URL`
