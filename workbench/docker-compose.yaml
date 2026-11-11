@@ -20,7 +20,7 @@ services:
       KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
 
   postgres:
-    image: postgres
+    image: postgres:18
     container_name: jitsu-tfacc-postgres
     ports:
       - "127.0.0.1:5432:5432"
@@ -29,10 +29,15 @@ services:
       POSTGRES_PASSWORD: plz_no_hack!
       POSTGRES_DB: reporting
     volumes:
-      - jitsu_tfacc_postgres_data:/var/lib/postgresql/data
+      - jitsu_tfacc_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U reporting -d reporting"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:26.8
     container_name: jitsu-tfacc-clickhouse
     restart: unless-stopped
     ports:
@@ -53,8 +58,9 @@ services:
     volumes:
       - jitsu_tfacc_redis_data:/data
 
+  # Keep in step with the Console the jitsu chart deploys (gitops-infra).
   jitsu-console:
-    image: jitsucom/console:latest
+    image: jitsucom/console:2.14.0
     container_name: jitsu-tfacc-console
     ports:
       - "127.0.0.1:3300:3000"
@@ -80,11 +86,22 @@ services:
       SEED_USER_PASSWORD: "admin123"
       NODE_ENV: "development"
       LOG_LEVEL: "debug"
+      MINUTE_RATE_LIMIT_ENABLED: "false"
+      JITSU_DISABLE_ANONYMOUS_TELEMETRY: "true"
     depends_on:
-      - postgres
-      - clickhouse
-      - kafka
-      - redis
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+      kafka:
+        condition: service_started
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://localhost:3000/api/healthcheck"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
 
 volumes:
   jitsu_tfacc_postgres_data:
