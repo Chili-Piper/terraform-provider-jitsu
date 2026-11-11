@@ -142,7 +142,11 @@ func cleanupTestDatabase(t *testing.T) (*sql.DB, string) {
 	data := filepath.Join(dir, "data")
 	run := func(name string, args ...string) {
 		t.Helper()
-		if output, err := exec.Command(name, args...).CombinedOutput(); err != nil {
+		cmd := exec.Command(name, args...)
+		// With no LANG or LC_ALL in the environment, postgres on macOS aborts with
+		// "postmaster became multithreaded during startup".
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
+		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s failed: %v\n%s", name, err, output)
 		}
 	}
