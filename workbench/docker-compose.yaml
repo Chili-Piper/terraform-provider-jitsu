@@ -37,7 +37,7 @@ services:
       retries: 30
 
   clickhouse:
-    image: clickhouse/clickhouse-server:26.8
+    image: clickhouse/clickhouse-server:26.10
     container_name: jitsu-tfacc-clickhouse
     restart: unless-stopped
     ports:
