@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
@@ -112,14 +113,46 @@ func (m *destinationModel) postgres(ctx context.Context) (*postgresModel, diag.D
 	return &pg, diags
 }
 
-// blockFor names the config block a destination type needs: bigquery and postgres have their own,
-// every other type uses the clickhouse block.
+// blockFor names the config block a destination type needs. A type the provider cannot configure,
+// seen only when reading a destination changed outside Terraform, reads into the clickhouse block.
 func blockFor(destinationType string) string {
 	switch destinationType {
 	case "bigquery", "postgres":
 		return destinationType
 	default:
 		return "clickhouse"
+	}
+}
+
+func validateDestinationType(value types.String) error {
+	if value.IsNull() || value.IsUnknown() {
+		return nil
+	}
+	switch value.ValueString() {
+	case "clickhouse", "bigquery", "postgres":
+		return nil
+	// Console accepts the clickhouse block for these two and drops its fields, so configurations
+	// using them applied before this check existed. It rejects the block for every other type.
+	case "devnull", "salesforce":
+		return nil
+	default:
+		return fmt.Errorf("destination_type must be clickhouse, bigquery, or postgres; got %q", value.ValueString())
+	}
+}
+
+type destinationTypeValidator struct{}
+
+func (destinationTypeValidator) Description(context.Context) string {
+	return "Destination type must be clickhouse, bigquery, or postgres."
+}
+
+func (v destinationTypeValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (destinationTypeValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if err := validateDestinationType(req.ConfigValue); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid destination type", err.Error())
 	}
 }
 
@@ -172,7 +205,8 @@ func (r *destinationResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"destination_type": schema.StringAttribute{
 				Required:    true,
-				Description: "Destination type (e.g., clickhouse, bigquery, postgres).",
+				Description: "Destination type: clickhouse, bigquery, or postgres.",
+				Validators:  []validator.String{destinationTypeValidator{}},
 			},
 			"clickhouse": schema.SingleNestedAttribute{
 				Optional:    true,
@@ -313,8 +347,8 @@ func (r *destinationResource) ValidateConfig(ctx context.Context, req resource.V
 		)
 	}
 
-	// Without a known destination_type we can't do type-specific checks.
-	if config.DestinationType.IsNull() || config.DestinationType.IsUnknown() {
+	// Without a known, supported destination_type we can't do type-specific checks.
+	if config.DestinationType.IsNull() || config.DestinationType.IsUnknown() || validateDestinationType(config.DestinationType) != nil {
 		return
 	}
 
@@ -353,6 +387,9 @@ func (r *destinationResource) buildPayload(ctx context.Context, plan *destinatio
 	pg, diags := plan.postgres(ctx)
 	if diags.HasError() {
 		return nil, fmt.Errorf("reading postgres config: %v", diags.Errors())
+	}
+	if err := validateDestinationType(plan.DestinationType); err != nil {
+		return nil, err
 	}
 	destinationType := plan.DestinationType.ValueString()
 	wanted := blockFor(destinationType)
@@ -480,16 +517,7 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		pg.Username = stringOrNull(result, "username")
 		pg.DefaultSchema = stringOrNull(result, "defaultSchema")
 		pg.SSLMode = stringOrNull(result, "sslMode")
-		switch v := result["port"].(type) {
-		case float64:
-			pg.Port = types.Int64Value(int64(v))
-		case int64:
-			pg.Port = types.Int64Value(v)
-		case int:
-			pg.Port = types.Int64Value(int64(v))
-		default:
-			pg.Port = types.Int64Null()
-		}
+		pg.Port = int64OrNull(result, "port")
 		objVal, d := types.ObjectValueFrom(ctx, postgresAttrTypes, pg)
 		diags.Append(d...)
 		state.Postgres = objVal
@@ -504,12 +532,8 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		if oldBQ != nil {
 			bq.Credentials = oldBQ.Credentials
 		}
-		if v, ok := result["project"].(string); ok {
-			bq.ProjectID = types.StringValue(v)
-		}
-		if v, ok := result["bqDataset"].(string); ok {
-			bq.BQDataset = types.StringValue(v)
-		}
+		bq.ProjectID = stringOrNull(result, "project")
+		bq.BQDataset = stringOrNull(result, "bqDataset")
 		objVal, d := types.ObjectValueFrom(ctx, bigqueryAttrTypes, bq)
 		diags.Append(d...)
 		state.BigQuery = objVal
@@ -518,11 +542,7 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 
 	default:
 		ch := &clickhouseModel{}
-		if v, ok := result["protocol"].(string); ok {
-			ch.Protocol = types.StringValue(v)
-		} else {
-			ch.Protocol = types.StringNull()
-		}
+		ch.Protocol = stringOrNull(result, "protocol")
 		if hosts, ok := result["hosts"].([]interface{}); ok {
 			hostStrs := make([]string, 0, len(hosts))
 			for _, h := range hosts {
@@ -540,27 +560,15 @@ func (r *destinationResource) readAPIIntoState(ctx context.Context, result map[s
 		} else {
 			ch.Hosts = types.ListNull(types.StringType)
 		}
-		if v, ok := result["username"].(string); ok {
-			ch.Username = types.StringValue(v)
-		} else {
-			ch.Username = types.StringNull()
-		}
+		ch.Username = stringOrNull(result, "username")
 		// Password: API returns masked value — preserve state value.
 		oldCH, d := state.clickhouse(ctx)
 		diags.Append(d...)
 		if oldCH != nil {
 			ch.Password = oldCH.Password
 		}
-		if v, ok := result["database"].(string); ok {
-			ch.Database = types.StringValue(v)
-		} else {
-			ch.Database = types.StringNull()
-		}
-		if v, ok := result["cluster"].(string); ok {
-			ch.Cluster = types.StringValue(v)
-		} else {
-			ch.Cluster = types.StringNull()
-		}
+		ch.Database = stringOrNull(result, "database")
+		ch.Cluster = stringOrNull(result, "cluster")
 		objVal, d := types.ObjectValueFrom(ctx, clickhouseAttrTypes, ch)
 		diags.Append(d...)
 		state.ClickHouse = objVal
@@ -673,6 +681,14 @@ func (r *destinationResource) ImportState(ctx context.Context, req resource.Impo
 		return
 	}
 
+	if destinationType, ok := result["destinationType"].(string); ok && validateDestinationType(types.StringValue(destinationType)) != nil {
+		resp.Diagnostics.AddError(
+			"Unsupported destination type",
+			fmt.Sprintf("Destination %s has type %q; the provider manages clickhouse, bigquery, and postgres destinations", parts[1], destinationType),
+		)
+		return
+	}
+
 	state := destinationModel{
 		WorkspaceID: types.StringValue(parts[0]),
 		ID:          types.StringValue(parts[1]),
@@ -684,12 +700,4 @@ func (r *destinationResource) ImportState(ctx context.Context, req resource.Impo
 	// Password/credentials not available on import — API returns masked values
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-}
-
-// stringOrNull reads a string field of a console response, null when absent.
-func stringOrNull(result map[string]interface{}, key string) types.String {
-	if v, ok := result[key].(string); ok {
-		return types.StringValue(v)
-	}
-	return types.StringNull()
 }
