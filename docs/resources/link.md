@@ -6,7 +6,7 @@ description: |-
 
 # jitsu_link (Resource)
 
-Manages a Jitsu link (connects a stream to a destination). The Jitsu link API has no update endpoint, so any attribute change triggers a destroy+create.
+Manages a Jitsu link (connects a stream to a destination). Settings and functions update in place, keeping the link ID and the Kafka topics derived from it. Only changing `workspace_id`, `from_id` or `to_id` replaces the link.
 
 ## Example Usage
 
@@ -40,16 +40,16 @@ resource "jitsu_link" "stream_to_clickhouse" {
 
 ### Optional
 
-- `mode` (String) - Delivery mode (e.g., `batch`, `stream`). Changing this forces a new resource.
+- `mode` (String) - Delivery mode (e.g., `batch`, `stream`).
 - `data_layout` (String) - Data layout: `segment`, `segment-single-table`, `jitsu-legacy`, or `passthrough`.
-- `primary_key` (String) - Comma-separated primary key columns. Changing this forces a new resource.
-- `frequency` (Number) - Batch frequency in minutes. Changing this forces a new resource.
-- `batch_size` (Number) - Maximum batch size. Changing this forces a new resource.
-- `deduplicate` (Boolean) - Enable deduplication. Changing this forces a new resource.
-- `deduplicate_window` (Number) - Deduplication window in days. Changing this forces a new resource.
-- `schema_freeze` (Boolean) - Freeze schema (prevent new columns). Changing this forces a new resource.
-- `timestamp_column` (String) - Timestamp column name. Changing this forces a new resource.
-- `keep_original_names` (Boolean) - Keep original event property names (no snake_case conversion). Changing this forces a new resource.
+- `primary_key` (String) - Comma-separated primary key columns.
+- `frequency` (Number) - Batch frequency in minutes.
+- `batch_size` (Number) - Maximum batch size.
+- `deduplicate` (Boolean) - Enable deduplication.
+- `deduplicate_window` (Number) - Deduplication window in days.
+- `schema_freeze` (Boolean) - Freeze schema (prevent new columns).
+- `timestamp_column` (String) - Timestamp column name.
+- `keep_original_names` (Boolean) - Keep original event property names (no snake_case conversion).
 - `functions` (List of String) - List of function IDs to apply. Use bare IDs for workspace functions (the provider adds `udf.`) or fully qualified `builtin.*` IDs for built-in functions.
 
 ### Read-Only

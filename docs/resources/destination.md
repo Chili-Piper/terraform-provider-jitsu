@@ -49,6 +49,8 @@ resource "jitsu_destination" "postgres" {
 - `destination_type` (String) - Destination type (e.g., `clickhouse`, `postgres`).
 - `clickhouse.hosts` (List of String) - List of host:port addresses, required inside the `clickhouse` object.
 - `postgres.host`, `postgres.database`, `postgres.username` (String) - required inside the `postgres` object.
+- `bigquery.credentials` (String, Sensitive) - Service account JSON key, required inside the `bigquery` object. API returns masked value; stored in state from user config.
+- `bigquery.project_id`, `bigquery.bq_dataset` (String) - GCP project ID and dataset name, required inside the `bigquery` object.
 
 Set exactly one of `clickhouse`, `bigquery` or `postgres`: the block that matches `destination_type`. Any type other than `bigquery` and `postgres` uses the `clickhouse` block.
 
@@ -72,6 +74,6 @@ Import using `workspace_id/destination_id`:
 terraform import jitsu_destination.example <workspace_id>/<destination_id>
 ```
 
-~> **Note:** The password is not available on import because the API returns a masked value.
+~> **Note:** The password and the BigQuery credentials are not available on import because the API returns masked values.
 
 Removing `clickhouse.protocol`, `clickhouse.username`, or `clickhouse.database` restores the Console defaults (`clickhouse-secure`, `default`, and `default`). Removing a configured `clickhouse.cluster` clears the cluster; removing a configured `clickhouse.password` or `postgres.password` resets it to an empty password. An omitted password after import remains unmanaged and is preserved.

@@ -118,11 +118,13 @@ resource "jitsu_destination" "clickhouse" {
   id               = "dest-clickhouse"
   name             = "Local ClickHouse"
   destination_type = "clickhouse"
-  protocol         = "http"
-  hosts            = ["clickhouse:8123"]
-  username         = "reporting"
-  password         = ""
-  database         = "default"
+
+  clickhouse = {
+    protocol = "http"
+    hosts    = ["clickhouse:8123"]
+    username = "reporting"
+    database = "default"
+  }
 }
 
 resource "jitsu_link" "site_to_clickhouse" {
