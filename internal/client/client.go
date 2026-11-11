@@ -226,7 +226,7 @@ func (c *Client) Create(ctx context.Context, workspaceID, resourceType string, p
 	}
 
 	if status < 200 || status >= 300 {
-		return nil, apiResponseError("POST", endpoint, status)
+		return nil, c.responseError("POST", endpoint, status, body, payload)
 	}
 
 	var result map[string]interface{}
@@ -249,7 +249,7 @@ func (c *Client) Read(ctx context.Context, workspaceID, resourceType, id string)
 	}
 
 	if status < 200 || status >= 300 {
-		return nil, apiResponseError("GET", endpoint, status)
+		return nil, c.responseError("GET", endpoint, status, body, nil)
 	}
 
 	var result map[string]interface{}
@@ -272,7 +272,7 @@ func (c *Client) Update(ctx context.Context, workspaceID, resourceType, id strin
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, apiResponseError("PUT", endpoint, status)
+		return nil, c.responseError("PUT", endpoint, status, body, payload)
 	}
 
 	var result map[string]interface{}
@@ -285,12 +285,12 @@ func (c *Client) Update(ctx context.Context, workspaceID, resourceType, id strin
 // Delete sends DELETE to remove a config object (soft-delete on Jitsu side).
 func (c *Client) Delete(ctx context.Context, workspaceID, resourceType, id string) error {
 	endpoint := c.configItemURL(workspaceID, resourceType, id)
-	_, status, err := c.doRequest(ctx, "DELETE", endpoint, nil)
+	body, status, err := c.doRequest(ctx, "DELETE", endpoint, nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return apiResponseError("DELETE", endpoint, status)
+		return c.responseError("DELETE", endpoint, status, body, nil)
 	}
 	return nil
 }
@@ -304,7 +304,7 @@ func (c *Client) List(ctx context.Context, workspaceID, resourceType string) ([]
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, apiResponseError("GET", endpoint, status)
+		return nil, c.responseError("GET", endpoint, status, body, nil)
 	}
 
 	var wrapper map[string]json.RawMessage
@@ -336,12 +336,12 @@ func (c *Client) DeleteLink(ctx context.Context, workspaceID, id string) error {
 		url.PathEscape(workspaceID),
 		url.QueryEscape(id),
 	)
-	_, status, err := c.doRequest(ctx, "DELETE", endpoint, nil)
+	body, status, err := c.doRequest(ctx, "DELETE", endpoint, nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return apiResponseError("DELETE", endpoint, status)
+		return c.responseError("DELETE", endpoint, status, body, nil)
 	}
 	return nil
 }
@@ -377,7 +377,7 @@ func (c *Client) WorkspaceCreate(ctx context.Context, name, slug string) (string
 				"workspace creation failed due to missing/invalid user session context",
 			)
 		}
-		return "", apiResponseError("POST", endpoint, status)
+		return "", c.responseError("POST", endpoint, status, body, payload)
 	}
 
 	var result map[string]interface{}
@@ -413,7 +413,7 @@ func (c *Client) readWorkspace(ctx context.Context, idOrSlug string) (map[string
 		return nil, nil
 	}
 	if status < 200 || status >= 300 {
-		return nil, apiResponseError("GET", endpoint, status)
+		return nil, c.responseError("GET", endpoint, status, body, nil)
 	}
 
 	var result map[string]interface{}
@@ -441,7 +441,7 @@ func (c *Client) releaseDeletedWorkspaceSlug(ctx context.Context, slug string) (
 		return false, err
 	}
 	if status < 200 || status >= 300 {
-		return false, apiResponseError("GET", endpoint, status)
+		return false, c.responseError("GET", endpoint, status, body, nil)
 	}
 	var identity struct {
 		Auth bool `json:"auth"`
@@ -497,7 +497,7 @@ func (c *Client) WorkspaceUpdate(ctx context.Context, idOrSlug, name, slug strin
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, apiResponseError("PUT", endpoint, status)
+		return nil, c.responseError("PUT", endpoint, status, body, payload)
 	}
 
 	var result map[string]interface{}
@@ -513,7 +513,7 @@ func (c *Client) WorkspaceDelete(ctx context.Context, workspaceID string) error 
 		"workspaceId": workspaceID,
 	}
 	endpoint := c.workspaceURL()
-	_, status, err := c.doRequest(ctx, http.MethodDelete, endpoint, payload)
+	body, status, err := c.doRequest(ctx, http.MethodDelete, endpoint, payload)
 	if err != nil {
 		return err
 	}
@@ -521,11 +521,7 @@ func (c *Client) WorkspaceDelete(ctx context.Context, workspaceID string) error 
 		return nil
 	}
 	if status < 200 || status >= 300 {
-		return apiResponseError("DELETE", endpoint, status)
+		return c.responseError("DELETE", endpoint, status, body, payload)
 	}
 	return nil
-}
-
-func apiResponseError(method, endpoint string, status int) error {
-	return fmt.Errorf("%s %s returned %d (%s); see Console server logs for details", method, endpoint, status, http.StatusText(status))
 }

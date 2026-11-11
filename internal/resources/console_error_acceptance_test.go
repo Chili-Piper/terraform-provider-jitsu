@@ -41,7 +41,7 @@ func TestAccAuditConsoleErrorSecret(t *testing.T) {
 	if d.HasError() {
 		t.Fatal(d)
 	}
-	model := destinationModel{WorkspaceID: types.StringValue(ws), ID: types.StringValue("invalid_" + ws), Name: types.StringValue("Invalid protocol"), DestinationType: types.StringValue("clickhouse"), BigQuery: types.ObjectNull(bigqueryAttrTypes), ClickHouse: mustClickhouseObject(t, ctx, &clickhouseModel{Protocol: types.StringValue("tcp"), Hosts: hosts, Username: types.StringValue("reporting"), Password: types.StringValue("credential-canary"), Database: types.StringValue("default"), Cluster: types.StringValue("")})}
+	model := destinationModel{WorkspaceID: types.StringValue(ws), ID: types.StringValue("invalid_" + ws), Name: types.StringValue("Invalid protocol"), DestinationType: types.StringValue("clickhouse"), BigQuery: types.ObjectNull(bigqueryAttrTypes), Postgres: types.ObjectNull(postgresAttrTypes), ClickHouse: mustClickhouseObject(t, ctx, &clickhouseModel{Protocol: types.StringValue("tcp"), Hosts: hosts, Username: types.StringValue("reporting"), Password: types.StringValue("credential-canary"), Database: types.StringValue("default"), Cluster: types.StringValue("")})}
 	planned := createRollbackTestState(t, r, &model)
 	resp := resource.CreateResponse{State: tfsdk.State{Schema: planned.Schema}}
 	r.Create(ctx, resource.CreateRequest{Plan: tfsdk.Plan{Raw: planned.Raw, Schema: planned.Schema}}, &resp)
@@ -52,5 +52,9 @@ func TestAccAuditConsoleErrorSecret(t *testing.T) {
 		if strings.Contains(diagnostic.Detail(), "credential-canary") {
 			t.Fatal("Console validation response leaked password through Terraform diagnostic")
 		}
+	}
+
+	if detail := resp.Diagnostics[0].Detail(); !strings.Contains(detail, "protocol: ") {
+		t.Fatalf("diagnostic does not name the rejected field: %s", detail)
 	}
 }
