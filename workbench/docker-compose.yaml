@@ -20,7 +20,7 @@ services:
       KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
 
   postgres:
-    image: postgres:18
+    image: postgres:19
     container_name: jitsu-tfacc-postgres
     ports:
       - "127.0.0.1:5432:5432"
