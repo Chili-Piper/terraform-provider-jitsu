@@ -148,3 +148,7 @@ provider_installation {
 ```
 3. Run `terraform apply` in examples/ directory - it will use your local binary
 4. See examples/main.tf for usage examples
+
+## Pull Request Conventions
+
+- **Label AI-assisted PRs**: add the `ai-assisted` label to PRs that contain AI-authored changes. The label already exists; never create it.
